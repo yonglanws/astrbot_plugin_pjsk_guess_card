@@ -166,6 +166,9 @@ class GuessCardPlugin(Star):  # type: ignore
         self.last_game_end_time = {} # 存储每个会话的最后游戏结束时间
         self.http_session = None
 
+        # 为每个会话的游戏启动过程添加锁，防止竞态条件
+        self.session_locks = {}
+
         # 新增：创建角色名到ID的映射
         self.character_name_to_id_map = {
             char['name'].lower(): char_id for char_id, char in self.characters_map.items()
@@ -449,22 +452,35 @@ class GuessCardPlugin(Star):  # type: ignore
             return
             
         session_id = event.unified_msg_origin
-        cooldown = self.config.get("game_cooldown_seconds", 60)
-        last_end_time = self.last_game_end_time.get(session_id, 0)
-        time_since_last_game = time.time() - last_end_time
 
-        if time_since_last_game < cooldown:
-            remaining_time = cooldown - time_since_last_game
-            time_display = f"{remaining_time:.3f}" if remaining_time < 1 else str(int(remaining_time))
-            yield event.plain_result(f"嗯......休息 {time_display} 秒再玩吧......")
-        
-        elif session_id in self.context.active_game_sessions:
-            yield event.plain_result("......有一个正在进行的游戏了呢。")
+        # --- 锁定会话以防止竞态条件 ---
+        if session_id not in self.session_locks:
+            self.session_locks[session_id] = asyncio.Lock()
+        lock = self.session_locks[session_id]
 
-        elif not self._can_play(event.get_sender_id()):
-            yield event.plain_result(f"......你今天的游戏次数已达上限（{self.config.get('daily_play_limit', 10)}次），请明天再来吧......")
-        
-        else:
+        async with lock:
+            if session_id in self.context.active_game_sessions:
+                yield event.plain_result("......有一个正在进行的游戏了呢。")
+                return
+
+            cooldown = self.config.get("game_cooldown_seconds", 60)
+            last_end_time = self.last_game_end_time.get(session_id, 0)
+            time_since_last_game = time.time() - last_end_time
+
+            if time_since_last_game < cooldown:
+                remaining_time = cooldown - time_since_last_game
+                time_display = f"{remaining_time:.3f}" if remaining_time < 1 else str(int(remaining_time))
+                yield event.plain_result(f"嗯......休息 {time_display} 秒再玩吧......")
+                return
+
+            if not self._can_play(event.get_sender_id()):
+                yield event.plain_result(f"......你今天的游戏次数已达上限（{self.config.get('daily_play_limit', 10)}次），请明天再来吧......")
+                return
+            
+            # 标记游戏会话为活动状态，然后释放锁
+            self.context.active_game_sessions.add(session_id)
+
+        try:
             # --- 新增：解析指定角色 ---
             args = event.message_str.strip().split(maxsplit=1)
             target_char_id = None
@@ -554,8 +570,6 @@ class GuessCardPlugin(Star):  # type: ignore
             # 在后台日志中输出答案，方便测试
             logger.info(f"[猜卡插件] 新游戏开始. 答案ID: {game_data['card']['id']}")
                 
-            self.context.active_game_sessions.add(session_id)
-            
             hints = []
             if game_data["show_rarity_hint"]:
                 rarity_map = {
@@ -592,7 +606,6 @@ class GuessCardPlugin(Star):  # type: ignore
             except Exception as e:
                 logger.error(f"......发送图片失败: {e}. Check if the file path is correct and accessible.")
                 yield event.plain_result("......发送问题图片时出错，游戏中断。")
-                self.context.active_game_sessions.remove(session_id)
                 return
 
             timeout_seconds = self.config.get("answer_timeout", 30)
@@ -648,11 +661,10 @@ class GuessCardPlugin(Star):  # type: ignore
                 await guess_waiter(event)
             except TimeoutError:
                 game_ended_by_timeout = True
-            finally:
-                self.last_game_end_time[session_id] = time.time() # 记录游戏结束时间
-                if session_id in self.context.active_game_sessions:
-                    self.context.active_game_sessions.remove(session_id)
             
+            # 记录游戏结束时间，无论游戏如何结束
+            self.last_game_end_time[session_id] = time.time()
+
             # --- 统一在游戏结束后公布结果 ---
             correct_id = game_data['card']['id']
 
@@ -679,6 +691,11 @@ class GuessCardPlugin(Star):  # type: ignore
             
             if image_msg:
                 yield event.chain_result(image_msg)
+
+        finally:
+            # 无论游戏如何结束（正常、超时、错误），都确保移除会话标记
+            if session_id in self.context.active_game_sessions:
+                self.context.active_game_sessions.remove(session_id)
 
 
     @filter.command("猜卡帮助")
