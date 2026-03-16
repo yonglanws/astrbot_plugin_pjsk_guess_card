@@ -55,8 +55,8 @@ except ImportError:
 # --- 插件元数据 ---
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡&nichinichisou"
-PLUGIN_DESCRIPTION = "PJSK猜卡插件"
-PLUGIN_VERSION = "1.1.2" # 版本升级
+PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
+PLUGIN_VERSION = "1.0.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
