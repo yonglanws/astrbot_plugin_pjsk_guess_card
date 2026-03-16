@@ -2,8 +2,7 @@
 
 ## 1. 插件功能简介
 > 本插件fork自[nichinichisou0609/astrbot_plugin_pjsk_guess_card
-](https://github.com/nichinichisou0609/astrbot_plugin_pjsk_guess_card)。相较原插件，本插件将玩法更改为让玩家猜出卡面的角色名称，而不是卡面ID
-
+](https://github.com/nichinichisou0609/astrbot_plugin_pjsk_guess_card)。相较原插件，本插件将玩法更改为让玩家猜出卡面的角色名称，而不是卡面ID，并增加了高斯模糊效果
 
 本插件是使用《初音未来 缤纷舞台》经过少量修改的卡面资源制作的猜卡面游戏。插件会随机展示一张经过模糊处理的角色卡牌图片，并给出少量提示，玩家需要在规定时间内根据图片和提示猜出正确的角色名称。
 
