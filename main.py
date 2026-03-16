@@ -8,8 +8,8 @@ import sqlite3
 import io
 from typing import List, Dict, Optional, Tuple, Union
 from pathlib import Path
-from jinja2 import Template
-from PIL import Image, ImageDraw, ImageFont
+
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from datetime import datetime
 from pilmoji import Pilmoji
 from urllib.error import URLError
@@ -54,10 +54,10 @@ except ImportError:
 
 # --- 插件元数据 ---
 PLUGIN_NAME = "pjsk_guess_card"
-PLUGIN_AUTHOR = "nichinichisou"
+PLUGIN_AUTHOR = "慵懒午睡&nichinichisou"
 PLUGIN_DESCRIPTION = "PJSK猜卡插件"
-PLUGIN_VERSION = "1.1.1" # 版本升级
-PLUGIN_REPO_URL = "https://github.com/nichinichisou0609/astrbot_plugin_pjsk_guess_card"
+PLUGIN_VERSION = "1.1.2" # 版本升级
+PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
 # --- 数据库管理 ---
@@ -86,52 +86,6 @@ def init_db(db_path: str):
             """
         )
         conn.commit()
-
-
-# --- 图像处理函数 ---
-# def optimize_image(image_path: str, output_path: Optional[str] = None, quality: int = 70, max_size: tuple = (800, 800)) -> str:
-#     """
-#     优化图像，降低质量和大小以加快发送速度
-    
-#     Args:
-#         image_path: 原图路径
-#         output_path: 输出路径，如果为None则生成临时路径
-#         quality: JPEG质量 (1-100)
-#         max_size: 最大尺寸 (宽, 高)
-        
-#     Returns:
-#         优化后图像的路径
-#     """
-#     if output_path is None:
-#         # 生成临时文件路径
-#         dirname = os.path.dirname(image_path)
-#         basename = os.path.basename(image_path)
-#         filename, ext = os.path.splitext(basename)
-#         output_path = os.path.join(dirname, f"{filename}_optimized{ext}")
-    
-#     try:
-#         with Image.open(image_path) as img:
-#             # 检查是否需要缩放
-#             width, height = img.size
-#             if width > max_size[0] or height > max_size[1]:
-#                 # 计算缩放比例
-#                 ratio = min(max_size[0] / width, max_size[1] / height)
-#                 new_size = (int(width * ratio), int(height * ratio))
-#                 # 使用resize而非thumbnail，避免LANCZOS类型问题
-#                 img = img.resize(new_size)
-            
-#             # 转换为RGB模式(JPEG不支持透明通道)
-#             if img.mode == 'RGBA':
-#                 img = img.convert('RGB')
-            
-#             # 保存为优化的JPEG
-#             img.save(output_path, "JPEG", quality=quality, optimize=True)
-#             logger.info(f"图像已优化: {output_path}")
-#             return output_path
-#     except Exception as e:
-#         logger.error(f"图像优化失败: {e}")
-#         return image_path  # 失败时返回原路径
-
 
 # --- 卡牌数据加载 ---
 def load_card_data(resources_dir: Path) -> Tuple[Optional[List[Dict]], Optional[Dict]]:
@@ -168,11 +122,6 @@ class GuessCardPlugin(Star):  # type: ignore
 
         # 为每个会话的游戏启动过程添加锁，防止竞态条件
         self.session_locks = {}
-
-        # 新增：创建角色名到ID的映射
-        self.character_name_to_id_map = {
-            char['name'].lower(): char_id for char_id, char in self.characters_map.items()
-        } if self.characters_map else {}
 
         # 使用 context 初始化共享的游戏会话状态
         if not hasattr(self.context, "active_game_sessions"):
@@ -253,27 +202,26 @@ class GuessCardPlugin(Star):  # type: ignore
                 return None
             return f"{base_url}/{'/'.join(Path(relative_path).parts)}"
 
-    async def _open_image(self, relative_path: str) -> Optional[Image.Image]:
+    async def _open_image(self, image_source: Union[Path, str]) -> Optional[Image.Image]:
         """打开一个资源图片，无论是本地路径还是远程URL。"""
-        source = self._get_resource_path_or_url(relative_path)
-        if not source:
+        if not image_source:
             return None
         
         try:
-            if isinstance(source, str) and source.startswith(('http://', 'https://')):
+            if isinstance(image_source, str) and image_source.startswith(('http://', 'https://')):
                 session = await self._get_session()
                 if not session:
                     logger.error("无法获取远程图片: `aiohttp` 模块未安装。")
                     return None
                 
-                async with session.get(source) as response:
+                async with session.get(image_source) as response:
                     response.raise_for_status() # Will raise an error for non-200 status
                     image_data = await response.read()
                     return Image.open(io.BytesIO(image_data))
             else:
-                return Image.open(source)
+                return Image.open(image_source)
         except (URLError, Exception) as e:
-            logger.error(f"无法打开图片资源 {source}: {e}", exc_info=True)
+            logger.error(f"无法打开图片资源 {image_source}: {e}", exc_info=True)
             return None
 
     def _is_group_allowed(self, event: AstrMessageEvent) -> bool:
@@ -298,67 +246,10 @@ class GuessCardPlugin(Star):  # type: ignore
         """获取数据库连接"""
         return sqlite3.connect(self.db_path)
 
-    async def _create_options_image(self, options: List[Dict], cols: int = 3) -> Optional[str]:
-        """根据提供的选项（缩略图）列表生成一个网格状的选项图片"""
-        if not options:
-            return None
 
-        thumb_w, thumb_h = 128, 128 # 固定尺寸
-        
-        padding = 15
-        text_h = 35
-        
-        # 根据列数计算行数
-        rows = (len(options) + cols - 1) // cols # 向上取整
-        
-        img_w = cols * thumb_w + (cols + 1) * padding
-        img_h = rows * (thumb_h + text_h) + (rows + 1) * padding
-
-        img = Image.new('RGBA', (img_w, img_h), (245, 245, 245, 255)) # 浅灰色背景
-        
-        try:
-            font = ImageFont.truetype(str(self.resources_dir / "font.ttf"), 20)
-        except IOError:
-            font = ImageFont.load_default()
-
-        draw = ImageDraw.Draw(img)
-
-        for i, option in enumerate(options):
-            row_idx = i // cols
-            col_idx = i % cols
-            
-            x = padding + col_idx * (thumb_w + padding)
-            y = padding + row_idx * (thumb_h + text_h + padding)
-
-            try:
-                thumb_img = await self._open_image(option['relative_thumb_path'])
-                if not thumb_img: continue
-                
-                thumb = thumb_img.convert("RGBA").resize((thumb_w, thumb_h), LANCZOS)
-                
-                img.paste(thumb, (x, y), thumb)
-                
-                # 绘制ID文本
-                text = f"ID: {option['id']}"
-                text_bbox = draw.textbbox((0, 0), text, font=font)
-                if text_bbox:
-                    text_width = text_bbox[2] - text_bbox[0]
-                    text_x = x + (thumb_w - text_width) / 2
-                    text_y = y + thumb_h + 5
-                    draw.text((text_x, text_y), text, font=font, fill=(30, 30, 50))
-            except Exception as e:
-                logger.error(f"处理缩略图失败: {option['relative_thumb_path']}, 错误: {e}")
-                continue
-
-        # Save image
-        output_dir = self.plugin_dir / "output"
-        os.makedirs(output_dir, exist_ok=True)
-        img_path = output_dir / f"options_{int(time.time())}.png"
-        img.save(img_path)
-        return str(img_path)
 
     def _cleanup_output_dir(self, max_age_seconds: int = 3600):
-        """清理旧的排行榜图片和选项图片"""
+        """清理旧的排行榜图片和模糊处理的图片"""
         output_dir = self.plugin_dir / "output"
         if not output_dir.exists():
             return
@@ -367,11 +258,11 @@ class GuessCardPlugin(Star):  # type: ignore
         try:
             for filename in os.listdir(output_dir):
                 file_path = output_dir / filename
-                # 确保只删除本插件生成的 png 和 jpg 图片 (包括排行榜、选项图和优化后的答案图)
+                # 确保只删除本插件生成的 png 和 jpg 图片 (包括排行榜、优化后的答案图和模糊处理的图片)
                 if file_path.is_file() and (
                     filename.startswith("ranking_") or 
-                    filename.startswith("options_") or
-                    filename.startswith("answer_")
+                    filename.startswith("answer_") or
+                    filename.startswith("blurred_")
                 ) and (filename.endswith(".png") or filename.endswith(".jpg")):
                     file_mtime = file_path.stat().st_mtime
                     if (now - file_mtime) > max_age_seconds:
@@ -379,39 +270,51 @@ class GuessCardPlugin(Star):  # type: ignore
                         logger.info(f"已清理旧图片: {filename}")
         except Exception as e:
             logger.error(f"清理图片时出错: {e}")
+    
+    async def _apply_gaussian_blur(self, image_source: Union[Path, str]) -> Optional[str]:
+        """对图片应用高斯模糊处理"""
+        try:
+            # 打开图片
+            img = await self._open_image(image_source)
+            if not img:
+                return None
+            
+            # 增加模糊强度
+            blur_radius = 20  # 统一使用较高的模糊半径
+            
+            # 应用高斯模糊
+            blurred_img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+            
+            # 保存模糊后的图片
+            output_dir = self.plugin_dir / "output"
+            os.makedirs(output_dir, exist_ok=True)
+            img_path = output_dir / f"blurred_{int(time.time())}.png"
+            blurred_img.save(img_path)
+            
+            return str(img_path)
+        except Exception as e:
+            logger.error(f"应用高斯模糊失败: {e}")
+            return None
 
     # --- 游戏逻辑 ---
-    def start_new_game(self, character_id: Optional[int] = None) -> Optional[Dict]:
+    def start_new_game(self) -> Optional[Dict]:
         """准备一轮新游戏，加入花前/花后逻辑"""
         if not self.guess_cards or not self.characters_map:
             logger.error("无法开始游戏，因为卡牌数据未成功加载。")
             return None
 
         card_pool = self.guess_cards
-        if character_id:
-            card_pool = [c for c in self.guess_cards if c['characterId'] == character_id]
-            if not card_pool:
-                logger.warning(f"没有找到角色ID为 {character_id} 的卡牌。")
-                return None
-
         card = random.choice(card_pool)
-        difficulty = random.choice(["easy", "normal", "hard"])
         card_type = random.choice(["normal", "after_training"])
         
-        # 修正: 使用 card['id'] 和 card_type 来构建正确的问题图片文件名
-        question_img_name = f"{card['id']}_card_{card_type}_{difficulty}.png"
+        # 使用原始卡面图片作为问题图片
         answer_image_filename = f"card_{card_type}.png"
 
         # 当使用本地资源时，检查图片是否存在
         if self.config.get("use_local_resources", True):
-            question_img_path = self.resources_dir / "questions" / question_img_name
-            if not question_img_path.exists():
-                logger.error(f"问题图片未找到: {question_img_path}")
-                return None
-
             answer_image_path = self.resources_dir / "member" / card["assetbundleName"] / answer_image_filename
             if not answer_image_path.exists():
-                logger.error(f"预处理的答案图片未找到: {answer_image_path}")
+                logger.error(f"卡面图片未找到: {answer_image_path}")
                 return None
 
         character = self.characters_map.get(card["characterId"])
@@ -419,33 +322,26 @@ class GuessCardPlugin(Star):  # type: ignore
             logger.error(f"未找到ID为 {card['characterId']} 的角色")
             return None
 
-        score_map = {"easy": 1, "normal": 2, "hard": 3}
-        base_score = score_map.get(difficulty, 1)
+        # 统一分数计算，每次操作增加1分
+        base_score = 1
         
         show_rarity_hint = random.choice([True, False])
         show_training_hint = random.choice([True, False])
 
-        if not show_rarity_hint:
-            base_score += 1
-        if not show_training_hint:
-            base_score += 1
-        
-        # 获取答案卡牌图片路径 (已预先压缩)
+        # 获取卡面图片路径
         
         return {
             "card": card,
-            "difficulty": difficulty,
             "card_state": card_type,
-            "question_image_source": self._get_resource_path_or_url(f"questions/{question_img_name}"),
+            "card_image_source": self._get_resource_path_or_url(f'member/{card["assetbundleName"]}/{answer_image_filename}'),
             "character": character,
             "score": base_score,
             "show_rarity_hint": show_rarity_hint,
             "show_training_hint": show_training_hint,
-            "answer_image_source": self._get_resource_path_or_url(f'member/{card["assetbundleName"]}/{answer_image_filename}'),
         }
 
     # --- 指令处理 ---
-    @filter.command("猜卡", alias={"guess", "gc","猜卡面"})
+    @filter.command("pjsk猜卡面", alias={"猜卡", "gc","猜卡面"})
     async def start_guess_card(self, event: AstrMessageEvent):
         """开始一轮猜卡游戏"""
         if not self._is_group_allowed(event):
@@ -460,7 +356,7 @@ class GuessCardPlugin(Star):  # type: ignore
 
         async with lock:
             if session_id in self.context.active_game_sessions:
-                yield event.plain_result("......有一个正在进行的游戏了呢。")
+                yield event.plain_result("当前已经有一个游戏在进行中啦~ 等它结束后再来玩吧！")
                 return
 
             cooldown = self.config.get("game_cooldown_seconds", 60)
@@ -470,105 +366,38 @@ class GuessCardPlugin(Star):  # type: ignore
             if time_since_last_game < cooldown:
                 remaining_time = cooldown - time_since_last_game
                 time_display = f"{remaining_time:.3f}" if remaining_time < 1 else str(int(remaining_time))
-                yield event.plain_result(f"嗯......休息 {time_display} 秒再玩吧......")
+                yield event.plain_result(f"让我们休息一下吧！{time_display}秒后再来玩哦~ 😊")
                 return
 
             if not self._can_play(event.get_sender_id()):
-                yield event.plain_result(f"......你今天的游戏次数已达上限（{self.config.get('daily_play_limit', 10)}次），请明天再来吧......")
+                yield event.plain_result(f"今天的游戏次数已经用完啦~ 明天再来玩吧！每天最多可以玩{self.config.get('daily_play_limit', 10)}次哦~ ✨")
                 return
             
             # 标记游戏会话为活动状态，然后释放锁
             self.context.active_game_sessions.add(session_id)
 
         try:
-            # --- 新增：解析指定角色 ---
-            args = event.message_str.strip().split(maxsplit=1)
-            target_char_id = None
-            target_char_name = ""
-            if len(args) > 1:
-                char_name_arg = args[1].lower()
-                # 优先完全匹配
-                if char_name_arg in self.character_name_to_id_map:
-                    target_char_id = self.character_name_to_id_map[char_name_arg]
-                else:
-                    # 模糊匹配
-                    for name, char_id in self.character_name_to_id_map.items():
-                        if name.startswith(char_name_arg):
-                            target_char_id = char_id
-                            break
-                
-                if not target_char_id:
-                    yield event.plain_result(f"......没有找到名为 '{args[1]}' 的角色。")
-                    return
-            # --- 结束 ---
-
             # 记录游戏开始，并增加该用户的每日游戏次数
             self._record_game_start(event.get_sender_id(), event.get_sender_name())
 
             # --- 新增：发送统计信标 ---
             asyncio.create_task(self._send_stats_ping("guess_card"))
 
-            game_data = self.start_new_game(character_id=target_char_id)
+            game_data = self.start_new_game()
             if not game_data:
                 yield event.plain_result("......开始游戏失败，可能是缺少资源文件或配置错误，请联系管理员。")
                 return
 
-            # --- V1.1.0 新功能：生成动态答案池图片 ---
-            options_img_path = None
-            correct_card = game_data['card']
-            difficulty = game_data['difficulty']
-            show_training_hint = game_data['show_training_hint']
-            show_rarity_hint = game_data['show_rarity_hint']
-
-            candidate_pool = []
-            if self.guess_cards:
-                character_id = correct_card['characterId']
-                rarity = correct_card['cardRarityType']
-
-                # 修正后的逻辑：
-                # 1. 基础范围是该角色的所有卡牌
-                candidate_pool = [c for c in self.guess_cards if c['characterId'] == character_id]
-                
-                # 2. 如果有星级提示，则将其作为过滤器应用
-                if show_rarity_hint:
-                    candidate_pool = [c for c in candidate_pool if c['cardRarityType'] == rarity]
+            # 对卡面图片应用高斯模糊处理
+            card_image_source = game_data.get("card_image_source")
+            blurred_image_path = await self._apply_gaussian_blur(card_image_source)
             
-            options = []
-            # 提示决定选项的展示方式
-            if show_training_hint:
-                # 有状态提示：只显示提示对应的那个状态的缩略图
-                state_to_show = game_data['card_state']
-                for card in candidate_pool:
-                    relative_thumb_path = f"member_thumb/{card['assetbundleName']}_{state_to_show}.png"
-                    options.append({'id': card['id'], 'relative_thumb_path': relative_thumb_path})
-                random.shuffle(options) # 单独排序
-            else:
-                # 没有状态提示：显示两种状态的缩略图，并让同一张卡的花前花后相邻
-                card_thumb_groups = []
-                for card in candidate_pool:
-                    group = []
-                    relative_normal_path = f"member_thumb/{card['assetbundleName']}_normal.png"
-                    group.append({'id': card['id'], 'relative_thumb_path': relative_normal_path})
-                    
-                    relative_after_path = f"member_thumb/{card['assetbundleName']}_after_training.png"
-                    group.append({'id': card['id'], 'relative_thumb_path': relative_after_path})
-                    
-                    if group:
-                        card_thumb_groups.append(group)
-                
-                # 随机打乱卡牌（组）的顺序，但保持花前花后配对
-                random.shuffle(card_thumb_groups)
-                # 将分组展开成最终的选项列表
-                options = [thumb for group in card_thumb_groups for thumb in group]
-            
-            if options:
-                # 横向最多显示5个，让图片比例协调
-                cols = min(len(options), 5)
-                options_img_path = await self._create_options_image(options, cols=cols)
-            # --- V1.1.0 功能结束 ---
+            if not blurred_image_path:
+                yield event.plain_result("哎呀，处理图片时遇到了一点小问题呢~ 游戏暂时中断了，稍后再试试吧！")
+                return
 
             # 在后台日志中输出答案，方便测试
-            logger.info(f"[猜卡插件] 新游戏开始. 答案ID: {game_data['card']['id']}")
+            logger.info(f"[猜卡插件] 新游戏开始. 答案: {game_data['character']['name']}")
                 
             hints = []
             if game_data["show_rarity_hint"]:
@@ -583,32 +412,22 @@ class GuessCardPlugin(Star):  # type: ignore
                 hints.append(f"状态提示: {state_text}")
 
             timeout_seconds = self.config.get("answer_timeout", 30)
-            character_name = game_data["character"]["name"]
             
-            # 如果指定了角色，在消息中提示
-            if target_char_id:
-                intro_text = f".......嗯\n难度: {game_data['difficulty']}，基础分: {game_data['score']}\n这是 {character_name} 的一张卡牌，请在{timeout_seconds}秒内发送卡牌ID进行回答。\n"
-            else:
-                intro_text = f".......嗯\n难度: {game_data['difficulty']}，基础分: {game_data['score']}\n这是 {character_name} 的一张卡牌，请在{timeout_seconds}秒内发送卡牌ID进行回答。\n"
+            intro_text = f"嗨嗨！✨来玩猜卡游戏吧！\n请在{timeout_seconds}秒内发送角色名称缩写进行回答哦\n"
             
             hint_text = "\n".join(hints) + "\n" if hints else ""
             
             msg_chain: list = [Comp.Plain(intro_text + hint_text)]
 
             try:
-                question_source = game_data.get("question_image_source")
-                if question_source:
-                    msg_chain.append(Comp.Image(file=str(question_source)))
-                
-                if options_img_path:
-                    msg_chain.append(Comp.Image(file=options_img_path))
+                # 发送模糊处理后的图片
+                if blurred_image_path:
+                    msg_chain.append(Comp.Image(file=blurred_image_path))
                 yield event.chain_result(msg_chain)
             except Exception as e:
                 logger.error(f"......发送图片失败: {e}. Check if the file path is correct and accessible.")
                 yield event.plain_result("......发送问题图片时出错，游戏中断。")
                 return
-
-            timeout_seconds = self.config.get("answer_timeout", 30)
             
             # 为当前轮次添加猜测次数计数器
             guess_attempts_count = 0
@@ -627,15 +446,14 @@ class GuessCardPlugin(Star):  # type: ignore
                 answer_text = answer_event.message_str.strip()
                 
                 # 移除对!前缀的强制要求
-                answer_id_str = re.sub(r"^[!！]", "", answer_text)
+                answer_name = re.sub(r"^[!！]", "", answer_text).lower()
 
-                if answer_id_str.isdigit():
+                if answer_name:
                     guess_attempts_count += 1
                     try:
-                        answer_id = int(answer_id_str)
-                        correct_id = game_data["card"]["id"]
+                        correct_name = game_data["character"]["name"].lower()
 
-                        if answer_id == correct_id:
+                        if answer_name == correct_name:
                             winner_id = answer_event.get_sender_id()
                             winner_name = answer_event.get_sender_name()
                             score = game_data["score"]
@@ -666,28 +484,26 @@ class GuessCardPlugin(Star):  # type: ignore
             self.last_game_end_time[session_id] = time.time()
 
             # --- 统一在游戏结束后公布结果 ---
-            correct_id = game_data['card']['id']
+            correct_name = game_data['character']['name']
 
             text_msg = []
             if winner_info:
-                text_msg.append(Comp.Plain(f"{winner_info['name']} ......回答正确了呢......\n"))
-                text_msg.append(Comp.Plain(f"获得 {winner_info['score']} 分......\n答案是: ID {correct_id}\n"))
+                text_msg.append(Comp.Plain(f"{winner_info['name']}答对了呢!获得了{winner_info['score']}分！继续加油哦~\n正确答案是: {correct_name}"))
             elif game_ended_by_attempts:
-                text_msg.append(Comp.Plain(f"本轮猜测次数已达上限（{max_guess_attempts}次）......无人答对......\n"))
-                text_msg.append(Comp.Plain(f"正确答案是: ID {correct_id}\n"))
+                text_msg.append(Comp.Plain(f"哎呀，本轮猜测次数已经用完了呢~ 没关系，下次一定可以的！\n"))
+                text_msg.append(Comp.Plain(f"正确答案是: {correct_name}\n"))
             elif game_ended_by_timeout:
-                text_msg.append(Comp.Plain("时间到.............好像......没有人答对......\n"))
-                text_msg.append(Comp.Plain(f"正确答案是: ID {correct_id}\n"))
+                text_msg.append(Comp.Plain("时间到啦~ 大家有没有猜出来呢？\n"))
+                text_msg.append(Comp.Plain(f"正确答案是: {correct_name}\n"))
             
             if text_msg:
                 yield event.chain_result(text_msg)
 
-            # 使用预先处理好的答案图片
-            question_source = game_data.get("question_image_source")
-            answer_source = game_data.get("answer_image_source")
+            # 使用原始卡面图片作为答案图片
+            card_image_source = game_data.get("card_image_source")
             image_msg = []
-            if question_source: image_msg.append(Comp.Image(file=str(question_source)))
-            if answer_source: image_msg.append(Comp.Image(file=str(answer_source)))
+            if card_image_source:
+                image_msg.append(Comp.Image(file=str(card_image_source)))
             
             if image_msg:
                 yield event.chain_result(image_msg)
@@ -698,26 +514,23 @@ class GuessCardPlugin(Star):  # type: ignore
                 self.context.active_game_sessions.remove(session_id)
 
 
-    @filter.command("猜卡帮助")
+    @filter.command("猜卡面帮助")
     async def show_guess_card_help(self, event: AstrMessageEvent):
         """显示猜卡插件帮助"""
         if not self._is_group_allowed(event):
             return
         help_text = (
-            "--- 猜卡插件帮助 ---\n\n"
-            "**基础指令**\n"
-            "  `猜卡` - 完全随机猜一张卡\n"
-            "  `猜卡 [角色名]` - 猜指定角色的卡 (例如: 猜卡 mfy)\n\n"
-            "**数据统计**\n"
-            "  `猜卡排行榜` - 查看猜卡总分排行榜\n"
-            "  `猜卡分数` - 查看自己的猜卡数据统计\n\n"
-            "**管理员指令**\n"
-            "  `重置猜卡次数 [用户ID]` - 重置指定用户的每日游戏次数"
+            "✨ PJSK猜卡面指南 ✨\n\n"
+            "基础指令\n"
+            "pjsk猜卡面 - 随机猜一张卡，看看你能不能认出来！\n\n"
+            "数据统计\n"
+            "猜卡面排行榜 - 查看猜卡总分排行榜，看看谁是猜卡大师！\n"
+            "猜卡面分数 - 查看自己的猜卡数据统计，了解自己的进步~\n\n"
         )
         yield event.plain_result(help_text)
 
 
-    @filter.command("猜卡分数", alias={"gcscore", "我的猜卡分数"})
+    @filter.command("猜卡面分数", alias={"gcscore", "猜卡分数"})
     async def show_user_score(self, event: AstrMessageEvent):
         """显示玩家自己的猜卡积分和统计数据"""
         if not self._is_group_allowed(event):
@@ -731,10 +544,10 @@ class GuessCardPlugin(Star):  # type: ignore
             user_data = cursor.fetchone()
             
         if not user_data:
-            yield event.plain_result(f"......{user_name}，你还没有参与过猜卡游戏哦。")
+            yield event.plain_result(f"{user_name}，你还没有参与过猜卡游戏哦！快来一起玩呀~ 🎮")
             return
             
-        score, attempts, correct_attempts, last_play_date, daily_plays = user_data
+        score, attempts, correct_attempts, _, _ = user_data
         accuracy = (correct_attempts * 100 / attempts) if attempts > 0 else 0
         
         # 计算排名
@@ -743,24 +556,19 @@ class GuessCardPlugin(Star):  # type: ignore
             cursor.execute("SELECT COUNT(*) FROM user_stats WHERE score > ?", (score,))
             rank = cursor.fetchone()[0] + 1
         
-        daily_limit = self.config.get("daily_play_limit", 10)
-        remaining_plays = daily_limit - daily_plays if last_play_date == time.strftime("%Y-%m-%d") else daily_limit
-        
         stats_text = (
-            f"--- {user_name} 的猜卡数据 ---\n"
+            f"✨ {user_name} 的猜卡数据 ✨\n"
             f"🏆 总分: {score} 分\n"
             f"🎯 正确率: {accuracy:.1f}%\n"
-
             f"🎮 游戏次数: {attempts} 次\n"
             f"✅ 答对次数: {correct_attempts} 次\n"
             f"🏅 当前排名: 第 {rank} 名\n"
-            f"📅 今日剩余游戏次数: {remaining_plays} 次"
         )
         
         yield event.plain_result(stats_text)
 
 
-    @filter.command("重置猜卡次数", alias={"resetgl"})
+    @filter.command("重置猜卡面次数", alias={"resetgl"})
     async def reset_guess_limit(self, event: AstrMessageEvent):
         """重置用户猜卡次数（仅限管理员）"""
         if not self._is_group_allowed(event):
@@ -770,7 +578,7 @@ class GuessCardPlugin(Star):  # type: ignore
         super_users = self.config.get("super_users", [])
 
         if str(sender_id) not in super_users:
-            yield event.plain_result("......抱歉，您没有权限使用此指令......")
+            yield event.plain_result("哎呀，这个指令只有管理员才能使用哦~ 😊")
             return
 
         # 从消息中解析出可能的目标用户ID
@@ -783,14 +591,14 @@ class GuessCardPlugin(Star):  # type: ignore
 
         if self._reset_user_limit(target_id_str):
             if target_id_str == sender_id:
-                yield event.plain_result("......您的猜卡次数已重置。")
+                yield event.plain_result("好的！你的猜卡次数已经重置啦~ 可以继续玩了哦！✨")
             else:
-                yield event.plain_result(f"......用户 {target_id_str} 的猜卡次数已重置。")
+                yield event.plain_result(f"好的！用户 {target_id_str} 的猜卡次数已经重置啦~ ✨")
         else:
-            yield event.plain_result(f"......未找到用户 {target_id_str} 的游戏记录，无法重置。")
+            yield event.plain_result(f"哎呀，没有找到用户 {target_id_str} 的游戏记录呢~ 是不是ID输入错了呀？")
 
 
-    @filter.command("猜卡排行榜", alias={"gcrank", "gctop"})
+    @filter.command("猜卡面排行榜", alias={"gcrank", "gctop"})
     async def show_ranking(self, event: AstrMessageEvent):
         """显示猜卡排行榜"""
         if not self._is_group_allowed(event):
@@ -807,7 +615,7 @@ class GuessCardPlugin(Star):  # type: ignore
             rows = cursor.fetchall()
 
         if not rows:
-            yield event.plain_result("......目前还没有人参与过猜卡游戏")
+            yield event.plain_result("还没有人参与过猜卡游戏呢~ 快来成为第一个玩家吧！✨")
             return
 
         # --- 使用 Pillow 生成图片 ---
@@ -852,7 +660,7 @@ class GuessCardPlugin(Star):  # type: ignore
             img = Image.alpha_composite(img, white_overlay)
 
             # 4. 设置文本和颜色
-            title_text = "猜卡排行榜"
+            title_text = "PJSK猜卡排行榜"
             font_color = (30, 30, 50)
             shadow_color = (180, 180, 190, 128)
             header_color = (80, 90, 120)
@@ -905,8 +713,8 @@ class GuessCardPlugin(Star):  # type: ignore
 
                     # 为前三名绘制更大的奖牌 (使用默认的左上角对齐)
                     if i < 3:
-                        # 使用更大的字体并微调Y轴位置以使其与数字视觉居中
-                        pilmoji.text((col_positions[0], current_y - 2), rank_icons[i], font=medal_font, fill=font_color)
+                        # 调整Y轴位置以使其与数字视觉居中
+                        pilmoji.text((col_positions[0], current_y - 30), rank_icons[i], font=medal_font, fill=font_color)
                     
                     max_name_width = col_positions[2] - col_positions[1] - 20
                     if body_font.getbbox(user_name)[2] > max_name_width:
@@ -930,7 +738,7 @@ class GuessCardPlugin(Star):  # type: ignore
                     current_y += 70
 
                 # 绘制页脚
-                footer_text = f"GuessCard v{PLUGIN_VERSION} | Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                footer_text = f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 footer_y = height - 25
                 pilmoji.text((center_x, footer_y), footer_text, font=id_font, fill=header_color, anchor="ms")
 
