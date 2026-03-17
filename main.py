@@ -56,7 +56,7 @@ except ImportError:
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡&nichinichisou"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "1.0.0" 
+PLUGIN_VERSION = "1.1.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
@@ -280,7 +280,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 return None
             
             # 增加模糊强度
-            blur_radius = 20  # 统一使用较高的模糊半径
+            blur_radius = 25  # 统一使用较高的模糊半径
             
             # 应用高斯模糊
             blurred_img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
@@ -397,7 +397,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 return
 
             # 在后台日志中输出答案，方便测试
-            logger.info(f"[猜卡插件] 新游戏开始. 答案: {game_data['character']['name']}")
+            logger.info(f"[猜卡插件] 新游戏开始. 答案: {game_data['character']['fullNameChinese']}")
                 
             hints = []
             if game_data["show_rarity_hint"]:
@@ -413,7 +413,7 @@ class GuessCardPlugin(Star):  # type: ignore
 
             timeout_seconds = self.config.get("answer_timeout", 30)
             
-            intro_text = f"嗨嗨！✨来玩猜卡游戏吧！\n请在{timeout_seconds}秒内发送角色名称缩写进行回答哦\n"
+            intro_text = f"嗨嗨！来玩猜卡游戏吧！\n请在{timeout_seconds}秒内发送角色名称缩写进行回答哦\n"
             
             hint_text = "\n".join(hints) + "\n" if hints else ""
             
@@ -451,9 +451,21 @@ class GuessCardPlugin(Star):  # type: ignore
                 if answer_name:
                     guess_attempts_count += 1
                     try:
-                        correct_name = game_data["character"]["name"].lower()
+                        correct_name_abbr = game_data["character"]["name"].lower()
+                        correct_name_chinese = game_data["character"]["fullNameChinese"].lower()
+                        aliases = game_data["character"].get("aliases", [])
+                        
+                        # 检查是否匹配任何一个可能的答案（缩写、中文名称、别名）
+                        is_correct = answer_name == correct_name_abbr or answer_name == correct_name_chinese
+                        
+                        # 检查是否匹配任何一个别名
+                        if not is_correct:
+                            for alias in aliases:
+                                if answer_name == alias.lower():
+                                    is_correct = True
+                                    break
 
-                        if answer_name == correct_name:
+                        if is_correct:
                             winner_id = answer_event.get_sender_id()
                             winner_name = answer_event.get_sender_name()
                             score = game_data["score"]
@@ -484,7 +496,7 @@ class GuessCardPlugin(Star):  # type: ignore
             self.last_game_end_time[session_id] = time.time()
 
             # --- 统一在游戏结束后公布结果 ---
-            correct_name = game_data['character']['name']
+            correct_name = game_data['character']['fullNameChinese']
 
             text_msg = []
             if winner_info:
