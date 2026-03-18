@@ -7,13 +7,11 @@ import os
 import sqlite3
 import io
 from contextlib import closing
-from typing import List, Dict, Optional, Tuple, Union
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from datetime import datetime
 from pilmoji import Pilmoji
-from urllib.error import URLError
 from urllib.parse import urlparse
 
 # 尝试导入 aiohttp，作为可选依赖
@@ -94,7 +92,7 @@ def init_db(db_path: str):
         conn.commit()
 
 # --- 卡牌数据加载 ---
-def load_card_data(resources_dir: Path) -> Tuple[Optional[List[Dict]], Optional[Dict]]:
+def load_card_data(resources_dir: Path) -> tuple[list[dict] | None, dict | None]:
     """从插件的 resources 目录加载 guess_cards.json 和 characters.json 的数据"""
     try:
         cards_file = resources_dir / "guess_cards.json"
@@ -120,6 +118,9 @@ class GuessCardPlugin(Star):  # type: ignore
         self.config = config
         self.plugin_dir = Path(os.path.dirname(__file__))
         self.resources_dir = self.plugin_dir / "resources"
+        self.data_dir = StarTools.get_data_dir(PLUGIN_NAME)
+        self.output_dir = self.data_dir / "output"
+        os.makedirs(self.output_dir, exist_ok=True)
         self.db_path = get_db_path(context, self.plugin_dir)
         init_db(self.db_path)
         self.guess_cards, self.characters_map = load_card_data(self.resources_dir)
@@ -132,6 +133,9 @@ class GuessCardPlugin(Star):  # type: ignore
         # 使用 context 初始化共享的游戏会话状态
         if not hasattr(self.context, "active_game_sessions"):
             self.context.active_game_sessions = set()
+        
+        # 添加会话初始化锁，防止并发创建多个 aiohttp ClientSession
+        self.session_lock = asyncio.Lock()
 
         if not self.guess_cards or not self.characters_map:
             logger.error("插件初始化失败，缺少必要的卡牌数据文件。插件功能将受限。")
@@ -192,12 +196,15 @@ class GuessCardPlugin(Star):  # type: ignore
             for alias in aliases:
                 self.valid_answers.add(alias.lower())
 
-    async def _get_session(self) -> Optional['aiohttp.ClientSession']:
+    async def _get_session(self) -> 'aiohttp.ClientSession' | None:
         """延迟初始化并获取 aiohttp session"""
         if not aiohttp:
             return None
         if self.http_session is None or self.http_session.closed:
-            self.http_session = aiohttp.ClientSession()
+            async with self.session_lock:
+                # 再次检查，防止在等待锁的过程中已经被其他协程创建
+                if self.http_session is None or self.http_session.closed:
+                    self.http_session = aiohttp.ClientSession()
         return self.http_session
 
     async def _send_stats_ping(self, game_type: str):
@@ -244,7 +251,7 @@ class GuessCardPlugin(Star):  # type: ignore
             except Exception as e:
                 logger.error(f"猜卡插件周期性清理任务失败: {e}", exc_info=True)
 
-    def _get_resource_path_or_url(self, relative_path: str) -> Optional[Union[Path, str]]:
+    def _get_resource_path_or_url(self, relative_path: str) -> Path | str | None:
         """根据配置返回资源的本地Path对象或远程URL字符串。"""
         use_local = self.config.get("use_local_resources", True)
         if use_local:
@@ -257,7 +264,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 return None
             return f"{base_url}/{'/'.join(Path(relative_path).parts)}"
 
-    async def _open_image(self, image_source: Union[Path, str]) -> Optional[Image.Image]:
+    async def _open_image(self, image_source: Path | str) -> Image.Image | None:
         """打开一个资源图片，无论是本地路径还是远程URL。"""
         if not image_source:
             return None
@@ -292,7 +299,7 @@ class GuessCardPlugin(Star):  # type: ignore
                     return Image.open(io.BytesIO(image_data))
             else:
                 return Image.open(image_source)
-        except (URLError, Exception) as e:
+        except Exception as e:
             logger.error(f"无法打开图片资源 {image_source}: {e}", exc_info=True)
             return None
 
@@ -322,14 +329,13 @@ class GuessCardPlugin(Star):  # type: ignore
 
     def _cleanup_output_dir(self, max_age_seconds: int = 3600):
         """清理旧的排行榜图片和模糊处理的图片"""
-        output_dir = self.plugin_dir / "output"
-        if not output_dir.exists():
+        if not self.output_dir.exists():
             return
             
         now = time.time()
         try:
-            for filename in os.listdir(output_dir):
-                file_path = output_dir / filename
+            for filename in os.listdir(self.output_dir):
+                file_path = self.output_dir / filename
                 # 确保只删除本插件生成的 png 和 jpg 图片 (包括排行榜、优化后的答案图和模糊处理的图片)
                 if file_path.is_file() and (
                     filename.startswith("ranking_") or 
@@ -343,7 +349,7 @@ class GuessCardPlugin(Star):  # type: ignore
         except Exception as e:
             logger.error(f"清理图片时出错: {e}")
     
-    def _apply_gaussian_blur_sync(self, image_source: Union[Path, str]) -> Optional[str]:
+    def _apply_gaussian_blur_sync(self, image_source: Path | str) -> str | None:
         """对图片应用高斯模糊处理（同步版本）"""
         try:
             if isinstance(image_source, str) and image_source.startswith(('http://', 'https://')):
@@ -356,9 +362,8 @@ class GuessCardPlugin(Star):  # type: ignore
                 blur_radius = 25
                 blurred_img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
                 
-                output_dir = self.plugin_dir / "output"
-                os.makedirs(output_dir, exist_ok=True)
-                img_path = output_dir / f"blurred_{time.time_ns()}.png"
+                os.makedirs(self.output_dir, exist_ok=True)
+                img_path = self.output_dir / f"blurred_{time.time_ns()}.png"
                 blurred_img.save(img_path)
                 
                 return str(img_path)
@@ -366,7 +371,7 @@ class GuessCardPlugin(Star):  # type: ignore
             logger.error(f"应用高斯模糊失败: {e}")
             return None
 
-    async def _apply_gaussian_blur(self, image_source: Union[Path, str]) -> Optional[str]:
+    async def _apply_gaussian_blur(self, image_source: Path | str) -> str | None:
         """对图片应用高斯模糊处理（异步包装）"""
         if isinstance(image_source, str) and image_source.startswith(('http://', 'https://')):
             img = await self._open_image(image_source)
@@ -374,16 +379,15 @@ class GuessCardPlugin(Star):  # type: ignore
                 return None
             blur_radius = 25
             blurred_img = await asyncio.to_thread(img.filter, ImageFilter.GaussianBlur(radius=blur_radius))
-            output_dir = self.plugin_dir / "output"
-            os.makedirs(output_dir, exist_ok=True)
-            img_path = output_dir / f"blurred_{time.time_ns()}.png"
+            os.makedirs(self.output_dir, exist_ok=True)
+            img_path = self.output_dir / f"blurred_{time.time_ns()}.png"
             await asyncio.to_thread(blurred_img.save, img_path)
             return str(img_path)
         else:
             return await asyncio.to_thread(self._apply_gaussian_blur_sync, image_source)
 
     # --- 游戏逻辑 ---
-    def start_new_game(self) -> Optional[Dict]:
+    def start_new_game(self) -> dict | None:
         """准备一轮新游戏，加入花前/花后逻辑"""
         if not self.guess_cards or not self.characters_map:
             logger.error("无法开始游戏，因为卡牌数据未成功加载。")
@@ -612,9 +616,8 @@ class GuessCardPlugin(Star):  # type: ignore
                     try:
                         img = await self._open_image(card_image_source)
                         if img:
-                            output_dir = self.plugin_dir / "output"
-                            os.makedirs(output_dir, exist_ok=True)
-                            img_path = output_dir / f"answer_{time.time_ns()}.png"
+                            os.makedirs(self.output_dir, exist_ok=True)
+                            img_path = self.output_dir / f"answer_{time.time_ns()}.png"
                             await asyncio.to_thread(img.save, img_path)
                             image_msg.append(Comp.Image(file=str(img_path)))
                     except Exception as e:
@@ -629,8 +632,7 @@ class GuessCardPlugin(Star):  # type: ignore
         finally:
             if session_id in self.context.active_game_sessions:
                 self.context.active_game_sessions.remove(session_id)
-            if session_id in self.session_locks:
-                del self.session_locks[session_id]
+            # 不再删除锁实例，保留锁以维持互斥机制
 
 
     @filter.command("猜卡面帮助")
@@ -745,7 +747,7 @@ class GuessCardPlugin(Star):  # type: ignore
             logger.error(f"使用Pillow生成排行榜图片失败: {e}", exc_info=True)
             yield event.plain_result("生成排行榜图片时出错，请联系管理员。")
 
-    def _render_ranking_image(self, rows: list) -> Optional[str]:
+    def _render_ranking_image(self, rows: list) -> str | None:
         """渲染排行榜图片（同步方法）"""
         try:
             width, height = 650, 950
@@ -842,9 +844,8 @@ class GuessCardPlugin(Star):  # type: ignore
                 footer_y = height - 25
                 pilmoji.text((center_x, footer_y), footer_text, font=id_font, fill=header_color, anchor="ms")
 
-            output_dir = self.plugin_dir / "output"
-            os.makedirs(output_dir, exist_ok=True)
-            img_path = output_dir / f"ranking_{time.time_ns()}.png"
+            os.makedirs(self.output_dir, exist_ok=True)
+            img_path = self.output_dir / f"ranking_{time.time_ns()}.png"
             img.save(img_path)
             return str(img_path)
 
