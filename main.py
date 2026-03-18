@@ -6,6 +6,7 @@ import time
 import os
 import sqlite3
 import io
+from contextlib import closing
 from typing import List, Dict, Optional, Tuple, Union
 from pathlib import Path
 
@@ -56,7 +57,7 @@ except ImportError:
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡&nichinichisou"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "1.1.0" 
+PLUGIN_VERSION = "1.2.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
@@ -133,13 +134,58 @@ class GuessCardPlugin(Star):  # type: ignore
         if not aiohttp:
             logger.warning("`aiohttp` 模块未安装，远程图片功能将受限或性能较差。建议安装: pip install aiohttp")
 
-        # --- 新增：初始化后台任务句柄 ---
         self._cleanup_task = None
+        self._background_tasks: set = set()
 
-        # 启动时清理一次旧图片
+        self._load_fonts()
+        self._build_valid_answers_set()
+
         self._cleanup_output_dir()
-        # --- 新增：启动周期性清理任务 ---
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup_task())
+        self._track_task(self._cleanup_task)
+
+    def _load_fonts(self):
+        """预加载字体文件，避免重复IO"""
+        font_path = self.resources_dir / "font.ttf"
+        try:
+            self.title_font = ImageFont.truetype(str(font_path), 48)
+            self.header_font = ImageFont.truetype(str(font_path), 28)
+            self.body_font = ImageFont.truetype(str(font_path), 26)
+            self.id_font = ImageFont.truetype(str(font_path), 16)
+            self.medal_font = ImageFont.truetype(str(font_path), 36)
+        except IOError:
+            logger.error(f"主要字体文件未找到: {font_path}. 将使用默认字体。")
+            default_font = ImageFont.load_default()
+            self.title_font = default_font
+            self.header_font = default_font
+            self.body_font = default_font
+            self.id_font = default_font
+            self.medal_font = default_font
+
+    def _track_task(self, task: asyncio.Task):
+        """跟踪后台任务，防止被GC回收"""
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    def _build_valid_answers_set(self):
+        """
+        构建所有有效的角色名称和别名的集合，用于快速验证用户输入
+        """
+        self.valid_answers = set()
+        if not self.characters_map:
+            return
+        
+        for character in self.characters_map.values():
+            # 添加英文缩写
+            if character.get("name"):
+                self.valid_answers.add(character["name"].lower())
+            # 添加中文名称
+            if character.get("fullNameChinese"):
+                self.valid_answers.add(character["fullNameChinese"].lower())
+            # 添加所有别名
+            aliases = character.get("aliases", [])
+            for alias in aliases:
+                self.valid_answers.add(alias.lower())
 
     async def _get_session(self) -> Optional['aiohttp.ClientSession']:
         """延迟初始化并获取 aiohttp session"""
@@ -271,30 +317,44 @@ class GuessCardPlugin(Star):  # type: ignore
         except Exception as e:
             logger.error(f"清理图片时出错: {e}")
     
-    async def _apply_gaussian_blur(self, image_source: Union[Path, str]) -> Optional[str]:
-        """对图片应用高斯模糊处理"""
+    def _apply_gaussian_blur_sync(self, image_source: Union[Path, str]) -> Optional[str]:
+        """对图片应用高斯模糊处理（同步版本）"""
         try:
-            # 打开图片
-            img = await self._open_image(image_source)
+            if isinstance(image_source, str) and image_source.startswith(('http://', 'https://')):
+                return None
+            
+            img = Image.open(image_source) if not isinstance(image_source, str) else Image.open(image_source)
             if not img:
                 return None
             
-            # 增加模糊强度
-            blur_radius = 25  # 统一使用较高的模糊半径
-            
-            # 应用高斯模糊
+            blur_radius = 25
             blurred_img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
             
-            # 保存模糊后的图片
             output_dir = self.plugin_dir / "output"
             os.makedirs(output_dir, exist_ok=True)
-            img_path = output_dir / f"blurred_{int(time.time())}.png"
+            img_path = output_dir / f"blurred_{time.time_ns()}.png"
             blurred_img.save(img_path)
             
             return str(img_path)
         except Exception as e:
             logger.error(f"应用高斯模糊失败: {e}")
             return None
+
+    async def _apply_gaussian_blur(self, image_source: Union[Path, str]) -> Optional[str]:
+        """对图片应用高斯模糊处理（异步包装）"""
+        if isinstance(image_source, str) and image_source.startswith(('http://', 'https://')):
+            img = await self._open_image(image_source)
+            if not img:
+                return None
+            blur_radius = 25
+            blurred_img = await asyncio.to_thread(img.filter, ImageFilter.GaussianBlur(radius=blur_radius))
+            output_dir = self.plugin_dir / "output"
+            os.makedirs(output_dir, exist_ok=True)
+            img_path = output_dir / f"blurred_{time.time_ns()}.png"
+            await asyncio.to_thread(blurred_img.save, img_path)
+            return str(img_path)
+        else:
+            return await asyncio.to_thread(self._apply_gaussian_blur_sync, image_source)
 
     # --- 游戏逻辑 ---
     def start_new_game(self) -> Optional[Dict]:
@@ -381,7 +441,7 @@ class GuessCardPlugin(Star):  # type: ignore
             self._record_game_start(event.get_sender_id(), event.get_sender_name())
 
             # --- 新增：发送统计信标 ---
-            asyncio.create_task(self._send_stats_ping("guess_card"))
+            self._track_task(asyncio.create_task(self._send_stats_ping("guess_card")))
 
             game_data = self.start_new_game()
             if not game_data:
@@ -449,6 +509,11 @@ class GuessCardPlugin(Star):  # type: ignore
                 answer_name = re.sub(r"^[!！]", "", answer_text).lower()
 
                 if answer_name:
+                    # 验证输入是否为有效的角色名称或别名
+                    if answer_name not in self.valid_answers:
+                        # 输入不是有效的角色名称或别名，忽略该输入
+                        return
+                        
                     guess_attempts_count += 1
                     try:
                         correct_name_abbr = game_data["character"]["name"].lower()
@@ -521,9 +586,10 @@ class GuessCardPlugin(Star):  # type: ignore
                 yield event.chain_result(image_msg)
 
         finally:
-            # 无论游戏如何结束（正常、超时、错误），都确保移除会话标记
             if session_id in self.context.active_game_sessions:
                 self.context.active_game_sessions.remove(session_id)
+            if session_id in self.session_locks:
+                del self.session_locks[session_id]
 
 
     @filter.command("猜卡面帮助")
@@ -550,7 +616,7 @@ class GuessCardPlugin(Star):  # type: ignore
         user_id = event.get_sender_id()
         user_name = event.get_sender_name()
         
-        with self.get_conn() as conn:
+        with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT score, attempts, correct_attempts, last_play_date, daily_plays FROM user_stats WHERE user_id = ?", (user_id,))
             user_data = cursor.fetchone()
@@ -562,8 +628,7 @@ class GuessCardPlugin(Star):  # type: ignore
         score, attempts, correct_attempts, _, _ = user_data
         accuracy = (correct_attempts * 100 / attempts) if attempts > 0 else 0
         
-        # 计算排名
-        with self.get_conn() as conn:
+        with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM user_stats WHERE score > ?", (score,))
             rank = cursor.fetchone()[0] + 1
@@ -616,10 +681,9 @@ class GuessCardPlugin(Star):  # type: ignore
         if not self._is_group_allowed(event):
             return
 
-        # 每次生成前都清理一次
         self._cleanup_output_dir()
 
-        with self.get_conn() as conn:
+        with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT user_id, user_name, score, attempts, correct_attempts FROM user_stats ORDER BY score DESC LIMIT 10"
@@ -630,12 +694,21 @@ class GuessCardPlugin(Star):  # type: ignore
             yield event.plain_result("还没有人参与过猜卡游戏呢~ 快来成为第一个玩家吧！✨")
             return
 
-        # --- 使用 Pillow 生成图片 ---
         try:
-            # 1. 设置参数 (增加高度以容纳所有条目)
+            img_path = await asyncio.to_thread(self._render_ranking_image, rows)
+            if img_path:
+                yield event.image_result(str(img_path))
+            else:
+                yield event.plain_result("生成排行榜图片时出错，请联系管理员。")
+        except Exception as e:
+            logger.error(f"使用Pillow生成排行榜图片失败: {e}", exc_info=True)
+            yield event.plain_result("生成排行榜图片时出错，请联系管理员。")
+
+    def _render_ranking_image(self, rows: list) -> Optional[str]:
+        """渲染排行榜图片（同步方法）"""
+        try:
             width, height = 650, 950
 
-            # 2. 创建默认的渐变背景
             bg_color_start = (230, 240, 255)
             bg_color_end = (200, 210, 240)
             img = Image.new("RGB", (width, height), bg_color_start)
@@ -646,32 +719,23 @@ class GuessCardPlugin(Star):  # type: ignore
                 b = int(bg_color_start[2] + (bg_color_end[2] - bg_color_start[2]) * y / height)
                 draw_bg.line([(0, y), (width, y)], fill=(r, g, b))
             
-            # 3. 检查并叠加半透明的自定义背景 (修正：强制从本地加载)
             background_path = self.resources_dir / "ranking_bg.png"
             if background_path.exists():
                 try:
                     custom_bg = Image.open(background_path).convert("RGBA")
                     custom_bg = custom_bg.resize((width, height), LANCZOS)
-                    
-                    # 设置自定义背景的透明度 (0-255)
                     custom_bg.putalpha(128)
-                    
-                    # 将渐变背景转为RGBA并与自定义背景混合
                     img = img.convert("RGBA")
                     img = Image.alpha_composite(img, custom_bg)
-
                 except Exception as e:
                     logger.warning(f"加载或混合自定义背景图片失败: {e}. 将仅使用默认背景。")
 
-            # 确保图像为RGBA模式以支持透明度
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
 
-            # 3. (新) 叠加一层半透明白色蒙版以提高可读性
-            white_overlay = Image.new("RGBA", img.size, (255, 255, 255, 100)) # 调整透明度以获得泛白效果
+            white_overlay = Image.new("RGBA", img.size, (255, 255, 255, 100))
             img = Image.alpha_composite(img, white_overlay)
 
-            # 4. 设置文本和颜色
             title_text = "PJSK猜卡排行榜"
             font_color = (30, 30, 50)
             shadow_color = (180, 180, 190, 128)
@@ -679,27 +743,17 @@ class GuessCardPlugin(Star):  # type: ignore
             score_color = (235, 120, 20)
             accuracy_color = (0, 128, 128)
             
-            # 5. 准备字体
-            try:
-                font_path = self.resources_dir / "font.ttf"
-                title_font = ImageFont.truetype(str(font_path), 48)
-                header_font = ImageFont.truetype(str(font_path), 28)
-                body_font = ImageFont.truetype(str(font_path), 26)
-                id_font = ImageFont.truetype(str(font_path), 16)
-                medal_font = ImageFont.truetype(str(font_path), 36) # 为奖牌使用更大的字体
-            except IOError:
-                logger.error(f"主要字体文件未找到: {font_path}. 将使用默认字体。")
-                title_font, header_font, body_font, id_font = [ImageFont.load_default()] * 4
-                medal_font = body_font # 如果主字体加载失败，奖牌回退到正文字体
+            title_font = self.title_font
+            header_font = self.header_font
+            body_font = self.body_font
+            id_font = self.id_font
+            medal_font = self.medal_font
 
-            # 6. 使用 Pilmoji 进行绘制
             with Pilmoji(img) as pilmoji:
-                # 绘制标题 (带阴影)
                 center_x, title_y = int(width / 2), 80
                 pilmoji.text((center_x + 2, title_y + 2), title_text, font=title_font, fill=shadow_color, anchor="mm", emoji_position_offset=(0, 6))
                 pilmoji.text((center_x, title_y), title_text, font=title_font, fill=font_color, anchor="mm", emoji_position_offset=(0, 6))
 
-                # 绘制表头
                 headers = ["排名", "玩家", "总分", "正确率", "总次数"]
                 col_positions_header = [40, 120, 320, 450, 560]
                 title_height = pilmoji.getsize(title_text, font=title_font)[1]
@@ -709,23 +763,18 @@ class GuessCardPlugin(Star):  # type: ignore
 
                 current_y += 55
 
-                # 绘制排行榜数据
                 rank_icons = ["🥇", "🥈", "🥉"]
                 for i, row in enumerate(rows):
                     user_id, user_name, score, attempts, correct_attempts = str(row[0]), row[1], str(row[2]), str(row[3]), row[4]
                     accuracy = f"{(correct_attempts * 100 / int(attempts) if int(attempts) > 0 else 0):.1f}%"
                     
-                    # --- 排名和奖牌对齐修正 ---
                     rank = i + 1
                     col_positions = [40, 120, 320, 450, 560]
-                    rank_num_align_x = 100 # 数字右对齐的位置
+                    rank_num_align_x = 100
 
-                    # 绘制排名数字 (恢复之前的右上角对齐)
                     pilmoji.text((rank_num_align_x, current_y), str(rank), font=body_font, fill=font_color, anchor="ra")
 
-                    # 为前三名绘制更大的奖牌 (使用默认的左上角对齐)
                     if i < 3:
-                        # 调整Y轴位置以使其与数字视觉居中
                         pilmoji.text((col_positions[0], current_y - 30), rank_icons[i], font=medal_font, fill=font_color)
                     
                     max_name_width = col_positions[2] - col_positions[1] - 20
@@ -734,43 +783,37 @@ class GuessCardPlugin(Star):  # type: ignore
                             user_name = user_name[:-1]
                         user_name += "..."
                     
-                    # 恢复之前的默认对齐方式 (移除所有 anchor)
                     pilmoji.text((col_positions[1], current_y), user_name, font=body_font, fill=font_color)
                     pilmoji.text((col_positions[1], current_y + 32), f"ID: {user_id}", font=id_font, fill=header_color)
                     pilmoji.text((col_positions[2], current_y), score, font=body_font, fill=score_color)
                     pilmoji.text((col_positions[3], current_y), accuracy, font=body_font, fill=accuracy_color)
                     pilmoji.text((col_positions[4], current_y), attempts, font=body_font, fill=font_color)
 
-                    # 绘制分割线
                     separator_y = current_y + 60
                     if i < len(rows) - 1:
-                        draw = ImageDraw.Draw(img) # 需要一个普通Draw对象来画线
+                        draw = ImageDraw.Draw(img)
                         draw.line([(30, separator_y), (width - 30, separator_y)], fill=(200, 200, 210, 128), width=1)
                     
                     current_y += 70
 
-                # 绘制页脚
                 footer_text = f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 footer_y = height - 25
                 pilmoji.text((center_x, footer_y), footer_text, font=id_font, fill=header_color, anchor="ms")
 
-            # Pilmoji 上下文管理器会自动处理保存
-            # 保存并发送图片
             output_dir = self.plugin_dir / "output"
             os.makedirs(output_dir, exist_ok=True)
-            img_path = output_dir / f"ranking_{int(time.time())}.png"
+            img_path = output_dir / f"ranking_{time.time_ns()}.png"
             img.save(img_path)
-
-            yield event.image_result(str(img_path))
+            return str(img_path)
 
         except Exception as e:
-            logger.error(f"使用Pillow生成排行榜图片失败: {e}", exc_info=True)
-            yield event.plain_result("生成排行榜图片时出错，请联系管理员。")
+            logger.error(f"渲染排行榜图片失败: {e}", exc_info=True)
+            return None
             
     # --- 数据更新与检查 ---
     def _record_game_start(self, user_id: str, user_name: str):
         """记录一次游戏开始，增加该用户的每日游戏次数"""
-        with self.get_conn() as conn:
+        with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
             today = time.strftime("%Y-%m-%d")
 
@@ -789,7 +832,6 @@ class GuessCardPlugin(Star):  # type: ignore
                     (user_name, today, new_daily_plays, user_id)
                 )
             else:
-                # 如果用户首次游戏，为其创建记录
                 cursor.execute(
                     "INSERT INTO user_stats (user_id, user_name, last_play_date, daily_plays) VALUES (?, ?, ?, ?)",
                     (user_id, user_name, today, 1)
@@ -798,7 +840,7 @@ class GuessCardPlugin(Star):  # type: ignore
 
     def _update_stats(self, user_id: str, user_name: str, score: int, correct: bool):
         """更新用户的得分和总尝试次数统计"""
-        with self.get_conn() as conn:
+        with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT score, attempts, correct_attempts FROM user_stats WHERE user_id = ?", (user_id,))
             user_data = cursor.fetchone()
@@ -817,7 +859,6 @@ class GuessCardPlugin(Star):  # type: ignore
                     (new_score, new_attempts, new_correct, user_name, user_id),
                 )
             else:
-                # 如果一个未开始过游戏的用户直接回答，也为他创建记录，但每日游戏次数为0
                 today = time.strftime("%Y-%m-%d")
                 cursor.execute(
                     "INSERT INTO user_stats (user_id, user_name, score, attempts, correct_attempts, last_play_date, daily_plays) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -828,7 +869,7 @@ class GuessCardPlugin(Star):  # type: ignore
     def _can_play(self, user_id: str) -> bool:
         """检查用户今天是否还能玩"""
         daily_limit = self.config.get("daily_play_limit", 10)
-        with self.get_conn() as conn:
+        with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
             today = time.strftime("%Y-%m-%d")
             cursor.execute("SELECT daily_plays, last_play_date FROM user_stats WHERE user_id = ?", (user_id,))
@@ -839,7 +880,7 @@ class GuessCardPlugin(Star):  # type: ignore
 
     def _reset_user_limit(self, user_id: str) -> bool:
         """重置指定用户的每日游戏次数"""
-        with self.get_conn() as conn:
+        with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT user_id FROM user_stats WHERE user_id = ?", (user_id,))
             if cursor.fetchone():
@@ -851,10 +892,10 @@ class GuessCardPlugin(Star):  # type: ignore
     async def terminate(self):
         """插件卸载或停用时调用"""
         logger.info("正在关闭猜卡插件的后台任务...")
-        if self._cleanup_task:
-            self._cleanup_task.cancel()
+        for task in self._background_tasks:
+            task.cancel()
+        self._background_tasks.clear()
         if self.http_session and not self.http_session.closed:
             await self.http_session.close()
             logger.info("aiohttp session已关闭。")
         logger.info("猜卡插件已终止。")
-        pass
