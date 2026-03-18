@@ -8,6 +8,7 @@ import sqlite3
 import io
 from contextlib import closing
 from pathlib import Path
+from typing import Optional, Union
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from datetime import datetime
@@ -60,7 +61,7 @@ except ImportError:
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "1.2.0" 
+PLUGIN_VERSION = "1.3.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
@@ -92,7 +93,7 @@ def init_db(db_path: str):
         conn.commit()
 
 # --- 卡牌数据加载 ---
-def load_card_data(resources_dir: Path) -> tuple[list[dict] | None, dict | None]:
+def load_card_data(resources_dir: Path) -> tuple[Optional[list[dict]], Optional[dict]]:
     """从插件的 resources 目录加载 guess_cards.json 和 characters.json 的数据"""
     try:
         cards_file = resources_dir / "guess_cards.json"
@@ -108,6 +109,255 @@ def load_card_data(resources_dir: Path) -> tuple[list[dict] | None, dict | None]
     except FileNotFoundError as e:
         logger.error(f"加载卡牌数据失败: {e}. 请确保 'guess_cards.json' 和 'characters.json' 在插件的 'resources' 目录中。")
         return None, None
+
+
+# --- 图片效果处理系统 ---
+class ImageEffectProcessor:
+    """图片效果处理器类，实现多种图片处理效果算法"""
+    
+    EFFECTS = {
+
+        "light_blur": {
+            "name": "轻度模糊",
+            "description": "轻微的高斯模糊效果",
+            "difficulty": 2,
+            "blur_radius": 15,
+            "enabled": True
+        },
+        "heavy_blur": {
+            "name": "重度模糊",
+            "description": "高强度高斯模糊效果",
+            "difficulty": 3,
+            "blur_radius": 40,
+            "enabled": True
+        },
+        "shuffle_blocks_easy": {
+            "name": "分块打乱(简易)",
+            "description": "将图片分割为较大方块并随机重新排列",
+            "difficulty": 1,
+            "block_size": 65,
+            "enabled": True
+        },
+        "shuffle_blocks_hard": {
+            "name": "分块打乱(困难)",
+            "description": "将图片分割为较小方块并随机重新排列",
+            "difficulty": 5,
+            "block_size": 20,
+            "enabled": True
+        },
+        "glitch": {
+            "name": "损坏效果",
+            "description": "模拟图片撕裂、噪点或数据损坏的视觉表现",
+            "difficulty": 4,
+            "glitch_intensity": 1,
+            "enabled": True
+        }
+    }
+    
+    COMBINATIONS = {}
+    
+    @classmethod
+    def get_enabled_effects(cls):
+        """获取所有启用的效果列表"""
+        return [k for k, v in cls.EFFECTS.items() if v["enabled"]]
+    
+    @classmethod
+    def calculate_difficulty(cls, effect_names):
+        """计算效果组合的综合难度分数"""
+        if not effect_names:
+            return 1
+        
+        total = 0
+        count = 0
+        for name in effect_names:
+            if name in cls.EFFECTS:
+                total += cls.EFFECTS[name]["difficulty"]
+                count += 1
+        
+        if count == 0:
+            return 1
+        
+        avg = total / count
+        return min(5, max(1, round(avg)))
+    
+    @classmethod
+    def apply_light_blur(cls, img, radius=8):
+        """应用轻度模糊效果"""
+        return img.filter(ImageFilter.GaussianBlur(radius=radius))
+    
+    @classmethod
+    def apply_heavy_blur(cls, img, radius=25):
+        """应用重度模糊效果"""
+        return img.filter(ImageFilter.GaussianBlur(radius=radius))
+    
+    @classmethod
+    def apply_shuffle_blocks(cls, img, block_size=50):
+        """应用分块打乱效果"""
+        w, h = img.size
+        result = Image.new(img.mode, (w, h))
+        
+        blocks = []
+        for y in range(0, h, block_size):
+            for x in range(0, w, block_size):
+                block = img.crop((x, y, min(x + block_size, w), min(y + block_size, h)))
+                blocks.append((x, y, block))
+        
+        random.shuffle(blocks)
+        
+        idx = 0
+        for y in range(0, h, block_size):
+            for x in range(0, w, block_size):
+                if idx < len(blocks):
+                    _, _, block = blocks[idx]
+                    result.paste(block, (x, y))
+                    idx += 1
+        
+        return result
+    
+    @classmethod
+    def apply_glitch(cls, img, intensity=0.5):
+        """应用损坏效果"""
+        w, h = img.size
+        pixels = img.load()
+        result = img.copy()
+        result_pixels = result.load()
+        
+        # 增加损坏强度
+        num_glitches = int(h * intensity)
+        
+        # 1. 增加撕裂效果
+        for _ in range(num_glitches):
+            if random.random() < 0.3:
+                # 更大范围的水平撕裂
+                y = random.randint(0, h - 1)
+                shift = random.randint(-30, 30)
+                if 0 <= y + shift < h:
+                    # 撕裂整行
+                    for x in range(w):
+                        result_pixels[x, y] = pixels[x, (y + shift) % h]
+            elif random.random() < 0.6:
+                # 水平扫描线撕裂
+                y = random.randint(0, h - 1)
+                # 撕裂多行
+                height = random.randint(1, 8)
+                shift = random.randint(-25, 25)
+                for dy in range(height):
+                    if 0 <= y + dy < h:
+                        for x in range(w):
+                            result_pixels[x, y + dy] = pixels[x, (y + dy + shift) % h]
+            elif random.random() < 0.8:
+                # 增强垂直撕裂
+                x = random.randint(0, w - 1)
+                # 增加垂直撕裂的范围
+                shift = random.randint(-35, 35)
+                if 0 <= x + shift < w:
+                    # 撕裂整列
+                    for y_col in range(h):
+                        result_pixels[x, y_col] = pixels[(x + shift) % w, y_col]
+            elif random.random() < 0.95:
+                # 垂直扫描线撕裂
+                x = random.randint(0, w - 1)
+                # 撕裂多列
+                width = random.randint(1, 5)
+                shift = random.randint(-30, 30)
+                for dx in range(width):
+                    if 0 <= x + dx < w:
+                        for y_col in range(h):
+                            result_pixels[x + dx, y_col] = pixels[(x + dx + shift) % w, y_col]
+            else:
+                # 2. 增加大量噪点
+                # 随机块噪点
+                y = random.randint(0, h - 15)
+                x = random.randint(0, w - 15)
+                block_size = random.randint(8, 20)
+                for dy in range(block_size):
+                    for dx in range(block_size):
+                        if 0 <= y + dy < h and 0 <= x + dx < w:
+                            if img.mode == 'RGB':
+                                result_pixels[x + dx, y + dy] = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+                            elif img.mode == 'RGBA':
+                                result_pixels[x + dx, y + dy] = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+                            else:
+                                result_pixels[x + dx, y + dy] = random.randint(0, 255)
+        
+        # 3. 减弱色彩偏移效果，降低饱和度
+        for _ in range(int(h * intensity * 0.3)):  # 减少色彩偏移的数量
+            y = random.randint(0, h - 1)
+            offset = random.randint(-3, 3)
+            for x in range(w):
+                if 0 <= x + offset < w:
+                    if img.mode == 'RGB':
+                        r, g, b = pixels[x, y]
+                        # 减弱色彩偏移，降低饱和度
+                        result_pixels[x, y] = ((r + random.randint(-15, 15)) % 256, 
+                                            (g + random.randint(-15, 15)) % 256, 
+                                            (b + random.randint(-15, 15)) % 256)
+                    elif img.mode == 'RGBA':
+                        r, g, b, a = pixels[x, y]
+                        result_pixels[x, y] = ((r + random.randint(-15, 15)) % 256, 
+                                            (g + random.randint(-15, 15)) % 256, 
+                                            (b + random.randint(-15, 15)) % 256, a)
+        
+        # 4. 整体降低饱和度
+        if img.mode == 'RGB' or img.mode == 'RGBA':
+            # 转换为灰度图
+            grayscale = result.convert('L')
+            # 转换回彩色模式，保持灰度效果
+            if img.mode == 'RGB':
+                result = Image.merge('RGB', (grayscale, grayscale, grayscale))
+            elif img.mode == 'RGBA':
+                alpha = result.split()[-1]
+                result = Image.merge('RGBA', (grayscale, grayscale, grayscale, alpha))
+        
+        return result
+    
+    @classmethod
+    def apply_effect(cls, img, effect_name, **kwargs):
+        """应用指定的图片效果"""
+        if effect_name == "none":
+            return img
+        elif effect_name == "light_blur":
+            radius = kwargs.get("blur_radius", cls.EFFECTS["light_blur"]["blur_radius"])
+            return cls.apply_light_blur(img, radius)
+        elif effect_name == "heavy_blur":
+            radius = kwargs.get("blur_radius", cls.EFFECTS["heavy_blur"]["blur_radius"])
+            return cls.apply_heavy_blur(img, radius)
+        elif effect_name == "shuffle_blocks_easy":
+            block_size = kwargs.get("block_size", cls.EFFECTS["shuffle_blocks_easy"]["block_size"])
+            return cls.apply_shuffle_blocks(img, block_size)
+        elif effect_name == "shuffle_blocks_hard":
+            block_size = kwargs.get("block_size", cls.EFFECTS["shuffle_blocks_hard"]["block_size"])
+            return cls.apply_shuffle_blocks(img, block_size)
+        elif effect_name == "glitch":
+            intensity = kwargs.get("glitch_intensity", cls.EFFECTS["glitch"]["glitch_intensity"])
+            return cls.apply_glitch(img, intensity)
+        return img
+    
+    @classmethod
+    def apply_effects(cls, img, effect_names):
+        """应用多个图片效果"""
+        result = img.copy()
+        for name in effect_names:
+            if name in cls.EFFECTS:
+                result = cls.apply_effect(result, name)
+        return result
+    
+    @classmethod
+    def random_effect(cls):
+        """随机选择一个效果"""
+        enabled = cls.get_enabled_effects()
+        return random.choice(enabled)
+    
+    @classmethod
+    def random_effect_combination(cls):
+        """随机选择一个效果组合"""
+        if cls.COMBINATIONS and random.random() < 0.3:
+            combo_key = random.choice(list(cls.COMBINATIONS.keys()))
+            combo = cls.COMBINATIONS[combo_key]
+            return combo["effects"], combo["name"]
+        else:
+            effect = cls.random_effect()
+            return [effect], cls.EFFECTS[effect]["name"]
 
 
 # --- 核心插件类 ---
@@ -196,7 +446,7 @@ class GuessCardPlugin(Star):  # type: ignore
             for alias in aliases:
                 self.valid_answers.add(alias.lower())
 
-    async def _get_session(self) -> 'aiohttp.ClientSession' | None:
+    async def _get_session(self) -> 'aiohttp.ClientSession':
         """延迟初始化并获取 aiohttp session"""
         if not aiohttp:
             return None
@@ -251,7 +501,7 @@ class GuessCardPlugin(Star):  # type: ignore
             except Exception as e:
                 logger.error(f"猜卡插件周期性清理任务失败: {e}", exc_info=True)
 
-    def _get_resource_path_or_url(self, relative_path: str) -> Path | str | None:
+    def _get_resource_path_or_url(self, relative_path: str) -> Optional[Union[Path, str]]:
         """根据配置返回资源的本地Path对象或远程URL字符串。"""
         use_local = self.config.get("use_local_resources", True)
         if use_local:
@@ -264,7 +514,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 return None
             return f"{base_url}/{'/'.join(Path(relative_path).parts)}"
 
-    async def _open_image(self, image_source: Path | str) -> Image.Image | None:
+    async def _open_image(self, image_source: Union[Path, str]) -> Optional[Image.Image]:
         """打开一个资源图片，无论是本地路径还是远程URL。"""
         if not image_source:
             return None
@@ -340,7 +590,8 @@ class GuessCardPlugin(Star):  # type: ignore
                 if file_path.is_file() and (
                     filename.startswith("ranking_") or 
                     filename.startswith("answer_") or
-                    filename.startswith("blurred_")
+                    filename.startswith("blurred_") or
+                    filename.startswith("processed_")
                 ) and (filename.endswith(".png") or filename.endswith(".jpg")):
                     file_mtime = file_path.stat().st_mtime
                     if (now - file_mtime) > max_age_seconds:
@@ -349,8 +600,8 @@ class GuessCardPlugin(Star):  # type: ignore
         except Exception as e:
             logger.error(f"清理图片时出错: {e}")
     
-    def _apply_gaussian_blur_sync(self, image_source: Path | str) -> str | None:
-        """对图片应用高斯模糊处理（同步版本）"""
+    def _apply_effects_sync(self, image_source: Union[Path, str], effect_names: list) -> Optional[str]:
+        """对图片应用多种效果处理（同步版本）"""
         try:
             if isinstance(image_source, str) and image_source.startswith(('http://', 'https://')):
                 return None
@@ -359,36 +610,34 @@ class GuessCardPlugin(Star):  # type: ignore
                 if not img:
                     return None
                 
-                blur_radius = 25
-                blurred_img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+                processed_img = ImageEffectProcessor.apply_effects(img, effect_names)
                 
                 os.makedirs(self.output_dir, exist_ok=True)
-                img_path = self.output_dir / f"blurred_{time.time_ns()}.png"
-                blurred_img.save(img_path)
+                img_path = self.output_dir / f"processed_{time.time_ns()}.png"
+                processed_img.save(img_path)
                 
                 return str(img_path)
         except Exception as e:
-            logger.error(f"应用高斯模糊失败: {e}")
+            logger.error(f"应用图片效果失败: {e}")
             return None
 
-    async def _apply_gaussian_blur(self, image_source: Path | str) -> str | None:
-        """对图片应用高斯模糊处理（异步包装）"""
+    async def _apply_effects(self, image_source: Union[Path, str], effect_names: list) -> Optional[str]:
+        """对图片应用多种效果处理（异步包装）"""
         if isinstance(image_source, str) and image_source.startswith(('http://', 'https://')):
             img = await self._open_image(image_source)
             if not img:
                 return None
-            blur_radius = 25
-            blurred_img = await asyncio.to_thread(img.filter, ImageFilter.GaussianBlur(radius=blur_radius))
+            processed_img = await asyncio.to_thread(ImageEffectProcessor.apply_effects, img, effect_names)
             os.makedirs(self.output_dir, exist_ok=True)
-            img_path = self.output_dir / f"blurred_{time.time_ns()}.png"
-            await asyncio.to_thread(blurred_img.save, img_path)
+            img_path = self.output_dir / f"processed_{time.time_ns()}.png"
+            await asyncio.to_thread(processed_img.save, img_path)
             return str(img_path)
         else:
-            return await asyncio.to_thread(self._apply_gaussian_blur_sync, image_source)
+            return await asyncio.to_thread(self._apply_effects_sync, image_source, effect_names)
 
     # --- 游戏逻辑 ---
-    def start_new_game(self) -> dict | None:
-        """准备一轮新游戏，加入花前/花后逻辑"""
+    def start_new_game(self) -> Optional[dict]:
+        """准备一轮新游戏，加入花前/花后逻辑和图片效果"""
         if not self.guess_cards or not self.characters_map:
             logger.error("无法开始游戏，因为卡牌数据未成功加载。")
             return None
@@ -412,8 +661,12 @@ class GuessCardPlugin(Star):  # type: ignore
             logger.error(f"未找到ID为 {card['characterId']} 的角色")
             return None
 
-        # 统一分数计算，每次操作增加1分
-        base_score = 1
+        # 选择随机效果或效果组合
+        effect_names, effect_name = ImageEffectProcessor.random_effect_combination()
+        difficulty = ImageEffectProcessor.calculate_difficulty(effect_names)
+        
+        # 根据难度计算基础分数，难度越高分数越高
+        base_score = difficulty
         
         show_rarity_hint = random.choice([True, False])
         show_training_hint = random.choice([True, False])
@@ -428,6 +681,9 @@ class GuessCardPlugin(Star):  # type: ignore
             "score": base_score,
             "show_rarity_hint": show_rarity_hint,
             "show_training_hint": show_training_hint,
+            "effect_names": effect_names,
+            "effect_name": effect_name,
+            "difficulty": difficulty,
         }
 
     # --- 指令处理 ---
@@ -478,16 +734,17 @@ class GuessCardPlugin(Star):  # type: ignore
                 yield event.plain_result("......开始游戏失败，可能是缺少资源文件或配置错误，请联系管理员。")
                 return
 
-            # 对卡面图片应用高斯模糊处理
+            # 对卡面图片应用多种效果处理
             card_image_source = game_data.get("card_image_source")
-            blurred_image_path = await self._apply_gaussian_blur(card_image_source)
+            effect_names = game_data.get("effect_names", ["heavy_blur"])
+            processed_image_path = await self._apply_effects(card_image_source, effect_names)
             
-            if not blurred_image_path:
+            if not processed_image_path:
                 yield event.plain_result("哎呀，处理图片时遇到了一点小问题呢~ 游戏暂时中断了，稍后再试试吧！")
                 return
 
-            # 在后台日志中输出答案，方便测试
-            logger.info(f"[猜卡插件] 新游戏开始. 答案: {game_data['character']['fullNameChinese']}")
+            # 在后台日志中输出答案和效果信息，方便测试
+            logger.info(f"[猜卡插件] 新游戏开始. 答案: {game_data['character']['fullNameChinese']}, 效果: {game_data.get('effect_name', '未知')}, 难度: {game_data.get('difficulty', 1)}")
                 
             hints = []
             if game_data["show_rarity_hint"]:
@@ -502,17 +759,21 @@ class GuessCardPlugin(Star):  # type: ignore
                 hints.append(f"状态提示: {state_text}")
 
             timeout_seconds = self.config.get("answer_timeout", 30)
+            effect_name = game_data.get("effect_name", "无效果")
+            difficulty = game_data.get("difficulty", 1)
+            difficulty_stars = "⭐" * difficulty
             
             intro_text = f"嗨嗨！来玩猜卡游戏吧！\n请在{timeout_seconds}秒内发送角色名称缩写进行回答哦\n"
+            effect_text = f"🎨 图片效果: {effect_name}\n📊 难度等级: {difficulty_stars} ({difficulty}/5分)\n💎 猜对得分: {difficulty}分\n"
             
             hint_text = "\n".join(hints) + "\n" if hints else ""
             
-            msg_chain: list = [Comp.Plain(intro_text + hint_text)]
+            msg_chain: list = [Comp.Plain(intro_text + effect_text + hint_text)]
 
             try:
-                # 发送模糊处理后的图片
-                if blurred_image_path:
-                    msg_chain.append(Comp.Image(file=blurred_image_path))
+                # 发送效果处理后的图片
+                if processed_image_path:
+                    msg_chain.append(Comp.Image(file=processed_image_path))
                 yield event.chain_result(msg_chain)
             except Exception as e:
                 logger.error(f"......发送图片失败: {e}. Check if the file path is correct and accessible.")
@@ -747,7 +1008,7 @@ class GuessCardPlugin(Star):  # type: ignore
             logger.error(f"使用Pillow生成排行榜图片失败: {e}", exc_info=True)
             yield event.plain_result("生成排行榜图片时出错，请联系管理员。")
 
-    def _render_ranking_image(self, rows: list) -> str | None:
+    def _render_ranking_image(self, rows: list) -> Optional[str]:
         """渲染排行榜图片（同步方法）"""
         try:
             width, height = 650, 950
