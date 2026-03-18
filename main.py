@@ -15,7 +15,12 @@ from datetime import datetime
 from pilmoji import Pilmoji
 from urllib.error import URLError
 from urllib.parse import urlparse
-import aiohttp
+
+# 尝试导入 aiohttp，作为可选依赖
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
 
 
 try:
@@ -55,7 +60,7 @@ except ImportError:
 
 # --- 插件元数据 ---
 PLUGIN_NAME = "pjsk_guess_card"
-PLUGIN_AUTHOR = "慵懒午睡&nichinichisou"
+PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
 PLUGIN_VERSION = "1.2.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
@@ -110,7 +115,7 @@ def load_card_data(resources_dir: Path) -> Tuple[Optional[List[Dict]], Optional[
 # --- 核心插件类 ---
 @register(PLUGIN_NAME, PLUGIN_AUTHOR, PLUGIN_DESCRIPTION, PLUGIN_VERSION, PLUGIN_REPO_URL)
 class GuessCardPlugin(Star):  # type: ignore
-    def __init__(self, context: Context, config: AstrBotConfig):
+    def __init__(self, context: Context, config: 'AstrBotConfig'):
         super().__init__(context)
         self.config = config
         self.plugin_dir = Path(os.path.dirname(__file__))
@@ -204,6 +209,7 @@ class GuessCardPlugin(Star):  # type: ignore
         if not resource_url_base:
             return
 
+        ping_url = None
         try:
             session = await self._get_session()
             if not session:
@@ -221,7 +227,10 @@ class GuessCardPlugin(Star):  # type: ignore
             async with session.get(ping_url, timeout=2):
                 pass  # We just need the request to be made.
         except Exception as e:
-            logger.warning(f"Stats ping to {ping_url} failed: {e}")
+            if ping_url:
+                logger.warning(f"Stats ping to {ping_url} failed: {e}")
+            else:
+                logger.warning(f"Stats ping failed: {e}")
 
     async def _periodic_cleanup_task(self):
         """每隔一小时自动清理一次 output 目录。"""
@@ -260,9 +269,26 @@ class GuessCardPlugin(Star):  # type: ignore
                     logger.error("无法获取远程图片: `aiohttp` 模块未安装。")
                     return None
                 
-                async with session.get(image_source) as response:
+                # 设置下载超时和最大文件大小
+                max_size = 10 * 1024 * 1024  # 10MB
+                
+                async with session.get(image_source, timeout=10) as response:
                     response.raise_for_status() # Will raise an error for non-200 status
-                    image_data = await response.read()
+                    
+                    # 检查文件大小
+                    content_length = response.headers.get('Content-Length')
+                    if content_length and int(content_length) > max_size:
+                        logger.error(f"远程图片过大: {content_length} bytes，超过限制 {max_size} bytes")
+                        return None
+                    
+                    # 分块读取，防止内存溢出
+                    image_data = b''
+                    async for chunk in response.content.iter_chunked(8192):
+                        image_data += chunk
+                        if len(image_data) > max_size:
+                            logger.error(f"远程图片下载超过大小限制 {max_size} bytes")
+                            return None
+                    
                     return Image.open(io.BytesIO(image_data))
             else:
                 return Image.open(image_source)
@@ -323,19 +349,19 @@ class GuessCardPlugin(Star):  # type: ignore
             if isinstance(image_source, str) and image_source.startswith(('http://', 'https://')):
                 return None
             
-            img = Image.open(image_source) if not isinstance(image_source, str) else Image.open(image_source)
-            if not img:
-                return None
-            
-            blur_radius = 25
-            blurred_img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-            
-            output_dir = self.plugin_dir / "output"
-            os.makedirs(output_dir, exist_ok=True)
-            img_path = output_dir / f"blurred_{time.time_ns()}.png"
-            blurred_img.save(img_path)
-            
-            return str(img_path)
+            with Image.open(image_source) as img:
+                if not img:
+                    return None
+                
+                blur_radius = 25
+                blurred_img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+                
+                output_dir = self.plugin_dir / "output"
+                os.makedirs(output_dir, exist_ok=True)
+                img_path = output_dir / f"blurred_{time.time_ns()}.png"
+                blurred_img.save(img_path)
+                
+                return str(img_path)
         except Exception as e:
             logger.error(f"应用高斯模糊失败: {e}")
             return None
@@ -580,7 +606,22 @@ class GuessCardPlugin(Star):  # type: ignore
             card_image_source = game_data.get("card_image_source")
             image_msg = []
             if card_image_source:
-                image_msg.append(Comp.Image(file=str(card_image_source)))
+                # 处理远程图片，确保发送本地文件
+                if isinstance(card_image_source, str) and card_image_source.startswith(('http://', 'https://')):
+                    # 下载远程图片到本地
+                    try:
+                        img = await self._open_image(card_image_source)
+                        if img:
+                            output_dir = self.plugin_dir / "output"
+                            os.makedirs(output_dir, exist_ok=True)
+                            img_path = output_dir / f"answer_{time.time_ns()}.png"
+                            await asyncio.to_thread(img.save, img_path)
+                            image_msg.append(Comp.Image(file=str(img_path)))
+                    except Exception as e:
+                        logger.error(f"下载远程答案图片失败: {e}")
+                else:
+                    # 本地图片直接发送
+                    image_msg.append(Comp.Image(file=str(card_image_source)))
             
             if image_msg:
                 yield event.chain_result(image_msg)
@@ -667,7 +708,7 @@ class GuessCardPlugin(Star):  # type: ignore
         target_id_str = str(target_id)
 
         if self._reset_user_limit(target_id_str):
-            if target_id_str == sender_id:
+            if target_id_str == str(sender_id):
                 yield event.plain_result("好的！你的猜卡次数已经重置啦~ 可以继续玩了哦！✨")
             else:
                 yield event.plain_result(f"好的！用户 {target_id_str} 的猜卡次数已经重置啦~ ✨")
@@ -722,11 +763,12 @@ class GuessCardPlugin(Star):  # type: ignore
             background_path = self.resources_dir / "ranking_bg.png"
             if background_path.exists():
                 try:
-                    custom_bg = Image.open(background_path).convert("RGBA")
-                    custom_bg = custom_bg.resize((width, height), LANCZOS)
-                    custom_bg.putalpha(128)
-                    img = img.convert("RGBA")
-                    img = Image.alpha_composite(img, custom_bg)
+                    with Image.open(background_path) as custom_bg:
+                        custom_bg = custom_bg.convert("RGBA")
+                        custom_bg = custom_bg.resize((width, height), LANCZOS)
+                        custom_bg.putalpha(128)
+                        img = img.convert("RGBA")
+                        img = Image.alpha_composite(img, custom_bg)
                 except Exception as e:
                     logger.warning(f"加载或混合自定义背景图片失败: {e}. 将仅使用默认背景。")
 
@@ -892,10 +934,24 @@ class GuessCardPlugin(Star):  # type: ignore
     async def terminate(self):
         """插件卸载或停用时调用"""
         logger.info("正在关闭猜卡插件的后台任务...")
-        for task in self._background_tasks:
-            task.cancel()
-        self._background_tasks.clear()
+        
+        # 取消并等待所有后台任务完成
+        if self._background_tasks:
+            tasks = list(self._background_tasks)
+            for task in tasks:
+                task.cancel()
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                logger.warning(f"等待任务完成时出错: {e}")
+            self._background_tasks.clear()
+        
+        # 关闭 aiohttp session
         if self.http_session and not self.http_session.closed:
-            await self.http_session.close()
-            logger.info("aiohttp session已关闭。")
+            try:
+                await self.http_session.close()
+                logger.info("aiohttp session已关闭。")
+            except Exception as e:
+                logger.error(f"关闭 aiohttp session 时出错: {e}")
+        
         logger.info("猜卡插件已终止。")
