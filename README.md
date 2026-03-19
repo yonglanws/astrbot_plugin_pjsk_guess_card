@@ -16,13 +16,16 @@
   <img width="800" height="492" alt="mohu2" src="https://github.com/user-attachments/assets/542cbaf1-9257-46ab-a11f-01e691f83886" />
 
 - **分块打乱(简易)**：较大方块的随机排列（1分）
-  <img width="800" height="492" alt="daluan1" src="https://github.com/user-attachments/assets/ce393de2-cd76-4e0f-ac42-9be02f0ebc1a" />
+  <img width="800" height="457" alt="03507283e5565746a5773e34f6005fc2" src="https://github.com/user-attachments/assets/16417c3f-93eb-43cd-be3c-de76e99f9b80" />
 
-- **分块打乱(困难)**：较小方块的随机排列（5分）
-  <img width="800" height="457" alt="daluan2" src="https://github.com/user-attachments/assets/5db09c97-7e0e-4f3b-8122-d92d9f13ed79" />
 
-- **损坏效果**：剧烈的撕裂和噪点效果（4分）
-  <img width="800" height="492" alt="sunhuai" src="https://github.com/user-attachments/assets/89d78ab3-f198-482b-9699-9d6b55e82bc3" />
+- **分块打乱(困难)**：较小方块的随机排列（4分）
+  <img width="800" height="492" alt="f7d037b3898764bd56822552d65351fe" src="https://github.com/user-attachments/assets/fb4af477-1560-4675-9de6-39b8982a2ff7" />
+
+
+- **损坏效果**：剧烈的撕裂和噪点效果（3分）
+  <img width="800" height="492" alt="22e5b04100ef95bfeedb75fb0608ff76" src="https://github.com/user-attachments/assets/bce7ed3c-8897-4b8c-8d8c-611ea44715c2" />
+
 
   
 **注意**：本插件所有必需的图片和数据资源均托管在服务器，并已经默认配置，不需要下载（日后可能会上传资源下载供本地使用），资源截止至日服v5.4.0版本
