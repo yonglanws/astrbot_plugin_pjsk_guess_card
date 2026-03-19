@@ -62,7 +62,7 @@ except ImportError:
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "1.4.0" 
+PLUGIN_VERSION = "1.5.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
@@ -155,8 +155,8 @@ class GameSession:
 class ImageEffectProcessor:
     """图片效果处理器类，实现多种图片处理效果算法"""
     
-    EFFECTS = {
-
+    # 默认效果配置
+    DEFAULT_EFFECTS = {
         "light_blur": {
             "name": "轻度模糊",
             "description": "轻微的高斯模糊效果",
@@ -181,14 +181,14 @@ class ImageEffectProcessor:
         "shuffle_blocks_hard": {
             "name": "分块打乱(困难)",
             "description": "将图片分割为较小方块并随机重新排列",
-            "difficulty": 5,
+            "difficulty": 4,
             "block_size": 20,
             "enabled": True
         },
         "glitch": {
             "name": "损坏效果",
             "description": "模拟图片撕裂、噪点或数据损坏的视觉表现",
-            "difficulty": 4,
+            "difficulty": 3,
             "glitch_intensity": 1,
             "enabled": True
         }
@@ -196,22 +196,52 @@ class ImageEffectProcessor:
     
     COMBINATIONS = {}
     
-    @classmethod
-    def get_enabled_effects(cls):
-        """获取所有启用的效果列表"""
-        return [k for k, v in cls.EFFECTS.items() if v["enabled"]]
+    def __init__(self, config=None):
+        """初始化效果处理器，可传入自定义配置"""
+        self.EFFECTS = self.DEFAULT_EFFECTS.copy()
+        if config:
+            self.update_from_nested_config(config)
     
-    @classmethod
-    def calculate_difficulty(cls, effect_names):
-        """计算效果组合的综合难度分数"""
+    def update_from_nested_config(self, config):
+        """从嵌套配置中更新效果设置"""
+        effects_config = config.get("effects", {})
+        logger.info(f"加载效果配置: {effects_config}")
+        
+        for effect_name, effect_config in effects_config.items():
+            if effect_name in self.EFFECTS:
+                if "enabled" in effect_config:
+                    self.EFFECTS[effect_name]["enabled"] = effect_config["enabled"]
+                    logger.info(f"设置 {effect_name} 启用状态: {effect_config['enabled']}")
+                if "difficulty" in effect_config:
+                    self.EFFECTS[effect_name]["difficulty"] = effect_config["difficulty"]
+                    logger.info(f"设置 {effect_name} 分数: {effect_config['difficulty']}")
+                if "blur_radius" in effect_config:
+                    self.EFFECTS[effect_name]["blur_radius"] = effect_config["blur_radius"]
+                    logger.info(f"设置 {effect_name} 模糊半径: {effect_config['blur_radius']}")
+                if "block_size" in effect_config:
+                    self.EFFECTS[effect_name]["block_size"] = effect_config["block_size"]
+                    logger.info(f"设置 {effect_name} 区块大小: {effect_config['block_size']}")
+                if "glitch_intensity" in effect_config:
+                    self.EFFECTS[effect_name]["glitch_intensity"] = effect_config["glitch_intensity"]
+                    logger.info(f"设置 {effect_name} 损坏强度: {effect_config['glitch_intensity']}")
+        
+        # 输出最终的效果配置
+        logger.info(f"最终效果配置: {self.EFFECTS}")
+    
+    def get_enabled_effects(self):
+        """获取所有启用的效果列表"""
+        return [k for k, v in self.EFFECTS.items() if v["enabled"]]
+    
+    def calculate_difficulty(self, effect_names):
+        """计算效果组合的综合分数"""
         if not effect_names:
             return 1
         
         total = 0
         count = 0
         for name in effect_names:
-            if name in cls.EFFECTS:
-                total += cls.EFFECTS[name]["difficulty"]
+            if name in self.EFFECTS:
+                total += self.EFFECTS[name]["difficulty"]
                 count += 1
         
         if count == 0:
@@ -232,27 +262,51 @@ class ImageEffectProcessor:
     
     @classmethod
     def apply_shuffle_blocks(cls, img, block_size=50):
-        """应用分块打乱效果"""
-        w, h = img.size
-        result = Image.new(img.mode, (w, h))
-        
-        blocks = []
-        for y in range(0, h, block_size):
-            for x in range(0, w, block_size):
-                block = img.crop((x, y, min(x + block_size, w), min(y + block_size, h)))
-                blocks.append((x, y, block))
-        
-        random.shuffle(blocks)
-        
-        idx = 0
-        for y in range(0, h, block_size):
-            for x in range(0, w, block_size):
-                if idx < len(blocks):
-                    _, _, block = blocks[idx]
-                    result.paste(block, (x, y))
-                    idx += 1
-        
-        return result
+        """应用分块打乱效果，确保无空白块"""
+        try:
+            w, h = img.size
+            result = Image.new(img.mode, (w, h))
+            
+            # 创建网格位置列表
+            positions = []
+            for y in range(0, h, block_size):
+                for x in range(0, w, block_size):
+                    positions.append((x, y))
+            
+            # 打乱位置顺序
+            shuffled_positions = positions.copy()
+            random.shuffle(shuffled_positions)
+            
+            # 为每个原始位置分配一个新的打乱位置
+            for idx, (orig_x, orig_y) in enumerate(positions):
+                # 计算当前区块的实际大小
+                current_w = min(block_size, w - orig_x)
+                current_h = min(block_size, h - orig_y)
+                
+                # 从原始位置切割区块
+                block = img.crop((orig_x, orig_y, orig_x + current_w, orig_y + current_h))
+                
+                # 获取打乱后的新位置
+                new_x, new_y = shuffled_positions[idx]
+                
+                # 确保新位置也有对应的区块大小
+                new_w = min(block_size, w - new_x)
+                new_h = min(block_size, h - new_y)
+                
+                # 如果大小不一致，需要调整区块大小
+                if current_w != new_w or current_h != new_h:
+                    try:
+                        block = block.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    except AttributeError:
+                        block = block.resize((new_w, new_h), Image.LANCZOS)
+                
+                # 将区块粘贴到新位置
+                result.paste(block, (new_x, new_y))
+            
+            return result
+        except Exception as e:
+            logger.error(f"分块打乱处理失败: {e}", exc_info=True)
+            return img
     
     @classmethod
     def apply_glitch(cls, img, intensity=0.5):
@@ -267,7 +321,8 @@ class ImageEffectProcessor:
         
         # 1. 增加撕裂效果
         for _ in range(num_glitches):
-            if random.random() < 0.8:
+            rand_val = random.random()
+            if rand_val < 0.3:
                 # 更大范围的水平撕裂
                 y = random.randint(0, h - 1)
                 shift = random.randint(-30, 30)
@@ -275,17 +330,17 @@ class ImageEffectProcessor:
                     # 撕裂整行
                     for x in range(w):
                         result_pixels[x, y] = pixels[x, (y + shift) % h]
-            elif random.random() < 0.8:
+            elif rand_val < 0.4:
                 # 水平扫描线撕裂
                 y = random.randint(0, h - 1)
                 # 撕裂多行
-                height = random.randint(1, 8)
+                height = random.randint(1, 10)
                 shift = random.randint(-25, 25)
                 for dy in range(height):
                     if 0 <= y + dy < h:
                         for x in range(w):
                             result_pixels[x, y + dy] = pixels[x, (y + dy + shift) % h]
-            elif random.random() < 0.8:
+            elif rand_val < 0.5:
                 # 增强垂直撕裂
                 x = random.randint(0, w - 1)
                 # 增加垂直撕裂的范围
@@ -294,11 +349,11 @@ class ImageEffectProcessor:
                     # 撕裂整列
                     for y_col in range(h):
                         result_pixels[x, y_col] = pixels[(x + shift) % w, y_col]
-            elif random.random() < 0.95:
+            elif rand_val < 0.85:
                 # 垂直扫描线撕裂
                 x = random.randint(0, w - 1)
                 # 撕裂多列
-                width = random.randint(1, 5)
+                width = random.randint(1, 10)
                 shift = random.randint(-30, 30)
                 for dx in range(width):
                     if 0 <= x + dx < w:
@@ -367,53 +422,50 @@ class ImageEffectProcessor:
         
         return result
     
-    @classmethod
-    def apply_effect(cls, img, effect_name, **kwargs):
+    def apply_effect(self, img, effect_name, **kwargs):
         """应用指定的图片效果"""
         if effect_name == "none":
             return img
         elif effect_name == "light_blur":
-            radius = kwargs.get("blur_radius", cls.EFFECTS["light_blur"]["blur_radius"])
-            return cls.apply_light_blur(img, radius)
+            radius = kwargs.get("blur_radius", self.EFFECTS["light_blur"]["blur_radius"])
+            return self.apply_light_blur(img, radius)
         elif effect_name == "heavy_blur":
-            radius = kwargs.get("blur_radius", cls.EFFECTS["heavy_blur"]["blur_radius"])
-            return cls.apply_heavy_blur(img, radius)
+            radius = kwargs.get("blur_radius", self.EFFECTS["heavy_blur"]["blur_radius"])
+            return self.apply_heavy_blur(img, radius)
         elif effect_name == "shuffle_blocks_easy":
-            block_size = kwargs.get("block_size", cls.EFFECTS["shuffle_blocks_easy"]["block_size"])
-            return cls.apply_shuffle_blocks(img, block_size)
+            block_size = kwargs.get("block_size", self.EFFECTS["shuffle_blocks_easy"]["block_size"])
+            return self.apply_shuffle_blocks(img, block_size)
         elif effect_name == "shuffle_blocks_hard":
-            block_size = kwargs.get("block_size", cls.EFFECTS["shuffle_blocks_hard"]["block_size"])
-            return cls.apply_shuffle_blocks(img, block_size)
+            block_size = kwargs.get("block_size", self.EFFECTS["shuffle_blocks_hard"]["block_size"])
+            return self.apply_shuffle_blocks(img, block_size)
         elif effect_name == "glitch":
-            intensity = kwargs.get("glitch_intensity", cls.EFFECTS["glitch"]["glitch_intensity"])
-            return cls.apply_glitch(img, intensity)
+            intensity = kwargs.get("glitch_intensity", self.EFFECTS["glitch"]["glitch_intensity"])
+            return self.apply_glitch(img, intensity)
         return img
     
-    @classmethod
-    def apply_effects(cls, img, effect_names):
+    def apply_effects(self, img, effect_names):
         """应用多个图片效果"""
         result = img.copy()
         for name in effect_names:
-            if name in cls.EFFECTS:
-                result = cls.apply_effect(result, name)
+            if name in self.EFFECTS:
+                result = self.apply_effect(result, name)
         return result
     
-    @classmethod
-    def random_effect(cls):
+    def random_effect(self):
         """随机选择一个效果"""
-        enabled = cls.get_enabled_effects()
+        enabled = self.get_enabled_effects()
+        logger.info(f"启用的效果列表: {enabled}")
         return random.choice(enabled)
     
-    @classmethod
-    def random_effect_combination(cls):
+    def random_effect_combination(self):
         """随机选择一个效果组合"""
-        if cls.COMBINATIONS and random.random() < 0.3:
-            combo_key = random.choice(list(cls.COMBINATIONS.keys()))
-            combo = cls.COMBINATIONS[combo_key]
+        if self.COMBINATIONS and random.random() < 0.3:
+            combo_key = random.choice(list(self.COMBINATIONS.keys()))
+            combo = self.COMBINATIONS[combo_key]
             return combo["effects"], combo["name"]
         else:
-            effect = cls.random_effect()
-            return [effect], cls.EFFECTS[effect]["name"]
+            effect = self.random_effect()
+            return [effect], self.EFFECTS[effect]["name"]
 
 
 # --- 核心插件类 ---
@@ -447,6 +499,10 @@ class GuessCardPlugin(Star):  # type: ignore
         
         # 卡面路径缓存，避免重复构造路径
         self.card_path_cache = LRUCache(max_size=100)
+        
+        # 初始化图片效果处理器，从配置读取效果设置
+        logger.info(f"完整配置: {dict(self.config)}")
+        self.effect_processor = ImageEffectProcessor(self.config)
         
         # 添加会话初始化锁，防止并发创建多个 aiohttp ClientSession
         self.session_lock = asyncio.Lock()
@@ -547,38 +603,6 @@ class GuessCardPlugin(Star):  # type: ignore
                 if self.http_session is None or self.http_session.closed:
                     self.http_session = aiohttp.ClientSession()
         return self.http_session
-
-    async def _send_stats_ping(self, game_type: str):
-        """(已重构) 向专用统计服务器的5000端口发送GET请求。"""
-        if self.config.get("use_local_resources", True):
-            return
-
-        resource_url_base = self.config.get("remote_resource_url_base", "")
-        if not resource_url_base:
-            return
-
-        ping_url = None
-        try:
-            session = await self._get_session()
-            if not session:
-                logger.warning("aiohttp not installed, cannot send stats ping.")
-                return
-
-            # 从资源URL中提取协议和主机名，然后强制使用5000端口
-            parsed_url = urlparse(resource_url_base)
-            stats_server_root = f"{parsed_url.scheme}://{parsed_url.hostname}:5000"
-            
-            # 构建最终的统计请求URL
-            ping_url = f"{stats_server_root}/stats_ping/{game_type}.ping"
-
-            # 异步发送请求
-            async with session.get(ping_url, timeout=2):
-                pass  # We just need the request to be made.
-        except Exception as e:
-            if ping_url:
-                logger.warning(f"Stats ping to {ping_url} failed: {e}")
-            else:
-                logger.warning(f"Stats ping failed: {e}")
 
     async def _periodic_cleanup_task(self):
         """每隔一小时自动清理一次 output 目录。"""
@@ -718,7 +742,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 if not img:
                     return None
                 
-                processed_img = ImageEffectProcessor.apply_effects(img, effect_names)
+                processed_img = self.effect_processor.apply_effects(img, effect_names)
                 
                 os.makedirs(self.output_dir, exist_ok=True)
                 img_path = self.output_dir / f"processed_{time.time_ns()}.png"
@@ -740,7 +764,7 @@ class GuessCardPlugin(Star):  # type: ignore
             if not img:
                 return None
             try:
-                processed_img = await asyncio.to_thread(ImageEffectProcessor.apply_effects, img, effect_names)
+                processed_img = await asyncio.to_thread(self.effect_processor.apply_effects, img, effect_names)
                 os.makedirs(self.output_dir, exist_ok=True)
                 img_path = self.output_dir / f"processed_{time.time_ns()}.png"
                 await asyncio.to_thread(processed_img.save, img_path)
@@ -777,8 +801,8 @@ class GuessCardPlugin(Star):  # type: ignore
             return None
 
         # 选择随机效果或效果组合
-        effect_names, effect_name = ImageEffectProcessor.random_effect_combination()
-        difficulty = ImageEffectProcessor.calculate_difficulty(effect_names)
+        effect_names, effect_name = self.effect_processor.random_effect_combination()
+        difficulty = self.effect_processor.calculate_difficulty(effect_names)
         
         # 根据难度计算基础分数，难度越高分数越高
         base_score = difficulty
@@ -838,9 +862,6 @@ class GuessCardPlugin(Star):  # type: ignore
             self.active_game_sessions.add(session_id)
 
         try:
-            # --- 新增：发送统计信标 ---
-            self._track_task(asyncio.create_task(self._send_stats_ping("guess_card")))
-
             game_data = self.start_new_game()
             if not game_data:
                 yield event.plain_result("......开始游戏失败，可能是缺少资源文件或配置错误，请联系管理员。")
@@ -875,8 +896,8 @@ class GuessCardPlugin(Star):  # type: ignore
             difficulty = game_data.get("difficulty", 1)
             difficulty_stars = "⭐" * difficulty
             
-            intro_text = f"嗨嗨！来玩猜卡游戏吧！\n请在{timeout_seconds}秒内发送角色名称缩写进行回答哦\n"
-            effect_text = f"🎨 图片效果: {effect_name}\n📊 难度等级: {difficulty_stars} ({difficulty}/5分)\n💎 猜对得分: {difficulty}分\n"
+            intro_text = f"嗨嗨！来玩猜卡面游戏吧！\n请在{timeout_seconds}秒内发送角色名称缩写进行回答哦(无需@机器人)\n"
+            effect_text = f"🎨 图片效果: {effect_name}\n💎 猜对得分: {difficulty}分\n"
             
             hint_text = "\n".join(hints) + "\n" if hints else ""
             
@@ -888,8 +909,8 @@ class GuessCardPlugin(Star):  # type: ignore
                     msg_chain.append(Comp.Image(file=processed_image_path))
                 yield event.chain_result(msg_chain)
             except Exception as e:
-                logger.error(f"......发送图片失败: {e}. Check if the file path is correct and accessible.")
-                yield event.plain_result("......发送问题图片时出错，游戏中断。")
+                logger.error(f"发送图片失败: {e}. Check if the file path is correct and accessible.")
+                yield event.plain_result("发送问题图片时出错，游戏中断。")
                 return
             
             # 记录游戏开始，并增加该用户的每日游戏次数（在成功发送图片后才记次）
@@ -954,8 +975,8 @@ class GuessCardPlugin(Star):  # type: ignore
                     except (ValueError, IndexError):
                         pass
 
-                    # 如果达到猜测次数上限，则结束游戏
-                    if game_session.guess_attempts_count >= max_guess_attempts:
+                    # 如果达到猜测次数上限，则结束游戏（-1表示无限制）
+                    if max_guess_attempts != -1 and game_session.guess_attempts_count >= max_guess_attempts:
                         game_session.game_ended_by_attempts = True
                         controller.stop()
 
@@ -1052,13 +1073,24 @@ class GuessCardPlugin(Star):  # type: ignore
             yield event.plain_result(f"{user_name}，你还没有参与过猜卡游戏哦！快来一起玩呀~ 🎮")
             return
             
-        score, attempts, correct_attempts, _, _ = user_data
+        score, attempts, correct_attempts, last_play_date, daily_plays = user_data
         accuracy = (correct_attempts * 100 / attempts) if attempts > 0 else 0
         
         with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM user_stats WHERE score > ?", (score,))
             rank = cursor.fetchone()[0] + 1
+        
+        # 计算今日剩余可猜次数
+        daily_limit = self.config.get("daily_play_limit", 10)
+        today = time.strftime("%Y-%m-%d")
+        remaining_plays = "无限次数"
+        if daily_limit != -1:
+            if last_play_date == today:
+                remaining = daily_limit - daily_plays
+                remaining_plays = f"{remaining}次" if remaining > 0 else "0次"
+            else:
+                remaining_plays = f"{daily_limit}次"
         
         stats_text = (
             f"✨ {user_name} 的猜卡数据 ✨\n"
@@ -1067,6 +1099,7 @@ class GuessCardPlugin(Star):  # type: ignore
             f"🎮 游戏次数: {attempts} 次\n"
             f"✅ 答对次数: {correct_attempts} 次\n"
             f"🏅 当前排名: 第 {rank} 名\n"
+            f"📅 今日剩余: {remaining_plays}\n"
         )
         
         yield event.plain_result(stats_text)
@@ -1110,10 +1143,13 @@ class GuessCardPlugin(Star):  # type: ignore
 
         self._cleanup_output_dir()
 
+        ranking_count = self.config.get("ranking_display_count", 10)
+        
         with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT user_id, user_name, score, attempts, correct_attempts FROM user_stats ORDER BY score DESC LIMIT 10"
+                f"SELECT user_id, user_name, score, attempts, correct_attempts FROM user_stats ORDER BY score DESC LIMIT ?",
+                (ranking_count,)
             )
             rows = cursor.fetchall()
 
@@ -1122,7 +1158,7 @@ class GuessCardPlugin(Star):  # type: ignore
             return
 
         try:
-            img_path = await asyncio.to_thread(self._render_ranking_image, rows)
+            img_path = await asyncio.to_thread(self._render_ranking_image, rows, ranking_count)
             if img_path:
                 yield event.image_result(str(img_path))
             else:
@@ -1131,10 +1167,14 @@ class GuessCardPlugin(Star):  # type: ignore
             logger.error(f"使用Pillow生成排行榜图片失败: {e}", exc_info=True)
             yield event.plain_result("生成排行榜图片时出错，请联系管理员。")
 
-    def _render_ranking_image(self, rows: list) -> Optional[str]:
-        """渲染排行榜图片（同步方法）"""
+    def _render_ranking_image(self, rows: list, ranking_count: int = 10) -> Optional[str]:
+        """渲染排行榜图片（同步方法），支持动态高度调整"""
         try:
-            width, height = 650, 950
+            width = 650
+            # 动态计算高度：基础高度 + 每个排名项的高度
+            base_height = 250
+            item_height = 70
+            height = base_height + len(rows) * item_height
 
             bg_color_start = (230, 240, 255)
             bg_color_end = (200, 210, 240)
@@ -1147,7 +1187,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 draw_bg.line([(0, y), (width, y)], fill=(r, g, b))
             
             background_path = self.resources_dir / "ranking_bg.png"
-            if background_path.exists():
+            if ranking_count == 10 and background_path.exists():
                 try:
                     with Image.open(background_path) as custom_bg:
                         custom_bg = custom_bg.convert("RGBA")
@@ -1294,8 +1334,11 @@ class GuessCardPlugin(Star):  # type: ignore
             conn.commit()
 
     def _can_play(self, user_id: str) -> bool:
-        """检查用户今天是否还能玩"""
+        """检查用户今天是否还能玩，支持-1表示无限制"""
         daily_limit = self.config.get("daily_play_limit", 10)
+        # 如果设置为-1，表示无限制
+        if daily_limit == -1:
+            return True
         with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
             today = time.strftime("%Y-%m-%d")
@@ -1339,4 +1382,4 @@ class GuessCardPlugin(Star):  # type: ignore
             except Exception as e:
                 logger.error(f"关闭 aiohttp session 时出错: {e}")
         
-        logger.info("猜卡插件已终止。")
+        logger.info("猜卡面插件已终止。")

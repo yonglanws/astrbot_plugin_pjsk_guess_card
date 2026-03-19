@@ -6,10 +6,10 @@
     "hint": "设置玩家回答问题的超时时间，单位为秒。"
   },
   "daily_play_limit": {
-    "description": "每位玩家每日可参与猜卡的次数上限",
+    "description": "每位玩家每日可参与猜卡的次数上限（-1表示无限制）",
     "type": "int",
     "default": 10,
-    "hint": "设置每个用户每天可以玩几次猜卡游戏。"
+    "hint": "设置每个用户每天可以玩几次猜卡游戏。设置为-1表示无限制。"
   },
   "super_users": {
     "description": "管理员用户ID列表",
@@ -36,8 +36,15 @@
   },
   "max_guess_attempts": {
     "type": "int",
-    "description": "每轮猜卡的最大尝试次数。",
-    "default": 10
+    "description": "每轮猜卡的最大尝试次数（-1表示无限制）",
+    "default": 10,
+    "hint": "设置每轮游戏中，所有玩家总共可以尝试回答的次数上限。设置为-1表示无限制。"
+  },
+  "remote_resource_url_base": {
+    "description": "远程资源服务器的根 URL",
+    "type": "string",
+    "default": "http://47.110.56.9",
+    "hint": "当'使用本地资源'为 false 时, 插件将从此 URL 下载资源。URL末尾不需要加'/'。例如: https://example.com/sekai_card_assets"
   },
   "use_local_resources": {
     "description": "是否使用本地资源",
@@ -45,10 +52,142 @@
     "default": false,
     "hint": "如果为 true, 插件将从本地 resources 文件夹加载图片。如果为 false, 将从下方配置的 URL 加载。"
   },
-  "remote_resource_url_base": {
-    "description": "远程资源服务器的根 URL",
-    "type": "string",
-    "default": "http://47.110.56.9",
-    "hint": "当'使用本地资源'为 false 时, 插件将从此 URL 下载资源。URL末尾不需要加'/'。例如: https://example.com/sekai_card_assets"
+  "ranking_display_count": {
+    "description": "排行榜显示的人数",
+    "type": "int",
+    "default": 10,
+    "hint": "设置排行榜要显示的玩家数量，建议范围：5-20"
+  },
+  "effects": {
+    "description": "图片效果配置",
+    "type": "object",
+    "default": {},
+    "items": {
+      "light_blur": {
+        "description": "轻度模糊效果配置",
+        "type": "object",
+        "default": {},
+        "items": {
+          "enabled": {
+            "type": "bool", 
+            "default": true,
+            "description": "是否启用",
+            "hint": "勾选此项以启用轻度模糊效果"
+          },
+          "difficulty": {
+            "type": "int", 
+            "default": 2,
+            "description": "分数",
+            "hint": "控制猜对时获得的分数"
+          },
+          "blur_radius": {
+            "type": "int", 
+            "default": 15,
+            "description": "模糊半径",
+            "hint": "控制模糊效果的强度，值越大越模糊"
+          }
+        }
+      },
+      "heavy_blur": {
+        "description": "重度模糊效果配置",
+        "type": "object",
+        "default": {},
+        "items": {
+          "enabled": {
+            "type": "bool", 
+            "default": true,
+            "description": "是否启用",
+            "hint": "勾选此项以启用重度模糊效果"
+          },
+          "difficulty": {
+            "type": "int", 
+            "default": 3,
+            "description": "分数",
+            "hint": "控制猜对时获得的分数"
+          },
+          "blur_radius": {
+            "type": "int", 
+            "default": 40,
+            "description": "模糊半径",
+            "hint": "控制模糊效果的强度，值越大越模糊"
+          }
+        }
+      },
+      "shuffle_blocks_easy": {
+        "description": "分块打乱(简易)效果配置",
+        "type": "object",
+        "default": {},
+        "items": {
+          "enabled": {
+            "type": "bool", 
+            "default": true,
+            "description": "是否启用",
+            "hint": "勾选此项以启用分块打乱(简易)效果"
+          },
+          "difficulty": {
+            "type": "int", 
+            "default": 1,
+            "description": "分数",
+            "hint": "控制猜对时获得的分数"
+          },
+          "block_size": {
+            "type": "int", 
+            "default": 65,
+            "description": "区块大小",
+            "hint": "控制分块的大小，值越大区块越少"
+          }
+        }
+      },
+      "shuffle_blocks_hard": {
+        "description": "分块打乱(困难)效果配置",
+        "type": "object",
+        "default": {},
+        "items": {
+          "enabled": {
+            "type": "bool", 
+            "default": true,
+            "description": "是否启用",
+            "hint": "勾选此项以启用分块打乱(困难)效果"
+          },
+          "difficulty": {
+            "type": "int", 
+            "default": 4,
+            "description": "分数",
+            "hint": "控制猜对时获得的分数"
+          },
+          "block_size": {
+            "type": "int", 
+            "default": 20,
+            "description": "区块大小",
+            "hint": "控制分块的大小，值越大区块越少"
+          }
+        }
+      },
+      "glitch": {
+        "description": "损坏效果配置",
+        "type": "object",
+        "default": {},
+        "items": {
+          "enabled": {
+            "type": "bool", 
+            "default": true,
+            "description": "是否启用",
+            "hint": "勾选此项以启用损坏效果"
+          },
+          "difficulty": {
+            "type": "int", 
+            "default": 3,
+            "description": "分数",
+            "hint": "控制猜对时获得的分数"
+          },
+          "glitch_intensity": {
+            "type": "int", 
+            "default": 1,
+            "description": "损坏强度",
+            "hint": "控制损坏效果的强度，值越大损坏越剧烈"
+          }
+        }
+      }
+    }
   }
 } 
