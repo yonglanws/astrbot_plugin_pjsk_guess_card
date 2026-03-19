@@ -9,6 +9,7 @@ import io
 from contextlib import closing
 from pathlib import Path
 from typing import Optional, Union
+from collections import OrderedDict
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from datetime import datetime
@@ -61,7 +62,7 @@ except ImportError:
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "1.3.0" 
+PLUGIN_VERSION = "1.4.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
@@ -109,6 +110,45 @@ def load_card_data(resources_dir: Path) -> tuple[Optional[list[dict]], Optional[
     except FileNotFoundError as e:
         logger.error(f"加载卡牌数据失败: {e}. 请确保 'guess_cards.json' 和 'characters.json' 在插件的 'resources' 目录中。")
         return None, None
+
+
+# --- 性能优化工具 ---
+class LRUCache:
+    """简单的LRU缓存实现，用于缓存常用资源"""
+    
+    def __init__(self, max_size: int = 50):
+        self.cache = OrderedDict()
+        self.max_size = max_size
+    
+    def get(self, key: str) -> Optional[any]:
+        if key not in self.cache:
+            return None
+        self.cache.move_to_end(key)
+        return self.cache[key]
+    
+    def set(self, key: str, value: any) -> None:
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        else:
+            if len(self.cache) >= self.max_size:
+                self.cache.popitem(last=False)
+        self.cache[key] = value
+    
+    def clear(self) -> None:
+        self.cache.clear()
+
+
+# --- 游戏状态管理 ---
+class GameSession:
+    """管理单个游戏会话的所有状态，确保会话间完全隔离"""
+    
+    def __init__(self):
+        self.guess_attempts_count = 0
+        self.game_ended_by_timeout = False
+        self.game_ended_by_attempts = False
+        self.winner_info = None
+        self.user_stats_recorded = set()
+        self.game_data = None
 
 
 # --- 图片效果处理系统 ---
@@ -227,7 +267,7 @@ class ImageEffectProcessor:
         
         # 1. 增加撕裂效果
         for _ in range(num_glitches):
-            if random.random() < 0.3:
+            if random.random() < 0.6:
                 # 更大范围的水平撕裂
                 y = random.randint(0, h - 1)
                 shift = random.randint(-30, 30)
@@ -266,13 +306,16 @@ class ImageEffectProcessor:
                             result_pixels[x + dx, y_col] = pixels[(x + dx + shift) % w, y_col]
             else:
                 # 2. 增加大量噪点
-                # 随机块噪点
-                y = random.randint(0, h - 15)
-                x = random.randint(0, w - 15)
-                block_size = random.randint(8, 20)
-                for dy in range(block_size):
-                    for dx in range(block_size):
-                        if 0 <= y + dy < h and 0 <= x + dx < w:
+                # 随机块噪点，确保小尺寸图片也能正常处理
+                max_y_offset = max(0, h - 20)
+                max_x_offset = max(0, w - 20)
+                y = random.randint(0, max_y_offset)
+                x = random.randint(0, max_x_offset)
+                max_block_size = min(20, h - y, w - x)
+                if max_block_size >= 8:
+                    block_size = random.randint(8, max_block_size)
+                    for dy in range(block_size):
+                        for dx in range(block_size):
                             if img.mode == 'RGB':
                                 result_pixels[x + dx, y + dy] = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
                             elif img.mode == 'RGBA':
@@ -380,9 +423,17 @@ class GuessCardPlugin(Star):  # type: ignore
         # 为每个会话的游戏启动过程添加锁，防止竞态条件
         self.session_locks = {}
 
-        # 使用 context 初始化共享的游戏会话状态
-        if not hasattr(self.context, "active_game_sessions"):
-            self.context.active_game_sessions = set()
+        # 使用插件自身的游戏会话状态，而不是共享的context
+        self.active_game_sessions = set()
+        
+        # 游戏会话状态管理，按session_id存储GameSession实例
+        self.game_sessions = {}
+        
+        # 图片处理缓存，提高重复图片处理性能
+        self.image_cache = LRUCache(max_size=30)
+        
+        # 卡面路径缓存，避免重复构造路径
+        self.card_path_cache = LRUCache(max_size=100)
         
         # 添加会话初始化锁，防止并发创建多个 aiohttp ClientSession
         self.session_lock = asyncio.Lock()
@@ -398,6 +449,12 @@ class GuessCardPlugin(Star):  # type: ignore
 
         self._load_fonts()
         self._build_valid_answers_set()
+        
+        # 统一白名单类型为字符串集合
+        self._normalize_group_whitelist()
+        
+        # 校验远程资源URL配置
+        self._validate_remote_resource_url()
 
         self._cleanup_output_dir()
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup_task())
@@ -445,6 +502,27 @@ class GuessCardPlugin(Star):  # type: ignore
             aliases = character.get("aliases", [])
             for alias in aliases:
                 self.valid_answers.add(alias.lower())
+
+    def _normalize_group_whitelist(self):
+        """统一白名单类型为字符串集合"""
+        whitelist = self.config.get("group_whitelist", [])
+        self.group_whitelist = {str(x) for x in whitelist}
+
+    def _validate_remote_resource_url(self):
+        """校验远程资源URL配置合法性"""
+        if self.config.get("use_local_resources", True):
+            return
+        
+        resource_url_base = self.config.get("remote_resource_url_base", "")
+        if not resource_url_base:
+            return
+        
+        try:
+            parsed_url = urlparse(resource_url_base)
+            if not parsed_url.scheme or not parsed_url.hostname:
+                logger.error(f"远程资源URL配置错误: {resource_url_base}。请确保URL格式正确，包含协议(如http/https)和主机名。")
+        except Exception as e:
+            logger.error(f"远程资源URL配置解析失败: {resource_url_base}, 错误: {e}")
 
     async def _get_session(self) -> 'aiohttp.ClientSession':
         """延迟初始化并获取 aiohttp session"""
@@ -538,10 +616,10 @@ class GuessCardPlugin(Star):  # type: ignore
                         logger.error(f"远程图片过大: {content_length} bytes，超过限制 {max_size} bytes")
                         return None
                     
-                    # 分块读取，防止内存溢出
-                    image_data = b''
+                    # 分块读取，防止内存溢出，使用bytearray提升性能
+                    image_data = bytearray()
                     async for chunk in response.content.iter_chunked(8192):
-                        image_data += chunk
+                        image_data.extend(chunk)
                         if len(image_data) > max_size:
                             logger.error(f"远程图片下载超过大小限制 {max_size} bytes")
                             return None
@@ -559,31 +637,31 @@ class GuessCardPlugin(Star):  # type: ignore
         - 如果白名单为空, 则允许所有群聊和私聊.
         - 如果白名单不为空, 则只允许在白名单内的群聊中触发, 并禁用所有私聊.
         """
-        whitelist = self.config.get("group_whitelist", [])
-        
-        if not whitelist:
+        if not self.group_whitelist:
             return True # 白名单为空, 允许所有
         
         # 白名单不为空, 开始严格检查
         group_id = event.get_group_id()
-        if group_id and str(group_id) in whitelist:
+        if group_id and str(group_id) in self.group_whitelist:
             return True # 是白名单中的群聊, 允许
             
         return False # 是私聊, 或非白名单群聊, 均不允许
 
     def get_conn(self) -> sqlite3.Connection:
-        """获取数据库连接"""
-        return sqlite3.connect(self.db_path)
+        """获取数据库连接，设置超时防止锁冲突"""
+        return sqlite3.connect(self.db_path, timeout=30.0)
 
 
 
     def _cleanup_output_dir(self, max_age_seconds: int = 3600):
-        """清理旧的排行榜图片和模糊处理的图片"""
+        """清理旧的排行榜图片和模糊处理的图片，同时清理相关缓存"""
         if not self.output_dir.exists():
             return
             
         now = time.time()
         try:
+            # 收集要删除的文件路径
+            files_to_delete = []
             for filename in os.listdir(self.output_dir):
                 file_path = self.output_dir / filename
                 # 确保只删除本插件生成的 png 和 jpg 图片 (包括排行榜、优化后的答案图和模糊处理的图片)
@@ -595,16 +673,33 @@ class GuessCardPlugin(Star):  # type: ignore
                 ) and (filename.endswith(".png") or filename.endswith(".jpg")):
                     file_mtime = file_path.stat().st_mtime
                     if (now - file_mtime) > max_age_seconds:
+                        files_to_delete.append(str(file_path))
                         os.remove(file_path)
                         logger.info(f"已清理旧图片: {filename}")
+            
+            # 清理缓存中已删除的文件
+            if files_to_delete:
+                keys_to_remove = []
+                for key, cached_path in self.image_cache.cache.items():
+                    if cached_path in files_to_delete:
+                        keys_to_remove.append(key)
+                for key in keys_to_remove:
+                    del self.image_cache.cache[key]
+                    
         except Exception as e:
             logger.error(f"清理图片时出错: {e}")
     
     def _apply_effects_sync(self, image_source: Union[Path, str], effect_names: list) -> Optional[str]:
-        """对图片应用多种效果处理（同步版本）"""
+        """对图片应用多种效果处理（同步版本），带缓存支持"""
         try:
             if isinstance(image_source, str) and image_source.startswith(('http://', 'https://')):
                 return None
+            
+            # 生成缓存键
+            cache_key = f"{str(image_source)}:{','.join(sorted(effect_names))}"
+            cached_result = self.image_cache.get(cache_key)
+            if cached_result and os.path.exists(cached_result):
+                return cached_result
             
             with Image.open(image_source) as img:
                 if not img:
@@ -616,7 +711,11 @@ class GuessCardPlugin(Star):  # type: ignore
                 img_path = self.output_dir / f"processed_{time.time_ns()}.png"
                 processed_img.save(img_path)
                 
-                return str(img_path)
+                # 存入缓存
+                result_path = str(img_path)
+                self.image_cache.set(cache_key, result_path)
+                
+                return result_path
         except Exception as e:
             logger.error(f"应用图片效果失败: {e}")
             return None
@@ -627,11 +726,14 @@ class GuessCardPlugin(Star):  # type: ignore
             img = await self._open_image(image_source)
             if not img:
                 return None
-            processed_img = await asyncio.to_thread(ImageEffectProcessor.apply_effects, img, effect_names)
-            os.makedirs(self.output_dir, exist_ok=True)
-            img_path = self.output_dir / f"processed_{time.time_ns()}.png"
-            await asyncio.to_thread(processed_img.save, img_path)
-            return str(img_path)
+            try:
+                processed_img = await asyncio.to_thread(ImageEffectProcessor.apply_effects, img, effect_names)
+                os.makedirs(self.output_dir, exist_ok=True)
+                img_path = self.output_dir / f"processed_{time.time_ns()}.png"
+                await asyncio.to_thread(processed_img.save, img_path)
+                return str(img_path)
+            finally:
+                img.close()
         else:
             return await asyncio.to_thread(self._apply_effects_sync, image_source, effect_names)
 
@@ -701,7 +803,7 @@ class GuessCardPlugin(Star):  # type: ignore
         lock = self.session_locks[session_id]
 
         async with lock:
-            if session_id in self.context.active_game_sessions:
+            if session_id in self.active_game_sessions:
                 yield event.plain_result("当前已经有一个游戏在进行中啦~ 等它结束后再来玩吧！")
                 return
 
@@ -720,12 +822,9 @@ class GuessCardPlugin(Star):  # type: ignore
                 return
             
             # 标记游戏会话为活动状态，然后释放锁
-            self.context.active_game_sessions.add(session_id)
+            self.active_game_sessions.add(session_id)
 
         try:
-            # 记录游戏开始，并增加该用户的每日游戏次数
-            self._record_game_start(event.get_sender_id(), event.get_sender_name())
-
             # --- 新增：发送统计信标 ---
             self._track_task(asyncio.create_task(self._send_stats_ping("guess_card")))
 
@@ -780,20 +879,18 @@ class GuessCardPlugin(Star):  # type: ignore
                 yield event.plain_result("......发送问题图片时出错，游戏中断。")
                 return
             
-            # 为当前轮次添加猜测次数计数器
-            guess_attempts_count = 0
-            max_guess_attempts = self.config.get("max_guess_attempts", 10)
+            # 记录游戏开始，并增加该用户的每日游戏次数（在成功发送图片后才记次）
+            self._record_game_start(event.get_sender_id(), event.get_sender_name())
             
-            # --- 新增: 游戏状态变量 ---
-            game_ended_by_timeout = False
-            winner_info = None
-            game_ended_by_attempts = False
+            # 创建并初始化游戏会话状态，确保完全按会话隔离
+            game_session = GameSession()
+            game_session.game_data = game_data
+            self.game_sessions[session_id] = game_session
+            max_guess_attempts = self.config.get("max_guess_attempts", 10)
 
 
             @session_waiter(timeout=timeout_seconds)  # type: ignore
             async def guess_waiter(controller: SessionController, answer_event: AstrMessageEvent):
-                nonlocal guess_attempts_count, winner_info, game_ended_by_attempts
-
                 answer_text = answer_event.message_str.strip()
                 
                 # 移除对!前缀的强制要求
@@ -805,11 +902,13 @@ class GuessCardPlugin(Star):  # type: ignore
                         # 输入不是有效的角色名称或别名，忽略该输入
                         return
                         
-                    guess_attempts_count += 1
+                    game_session.guess_attempts_count += 1
+                    user_id = answer_event.get_sender_id()
+                    
                     try:
-                        correct_name_abbr = game_data["character"]["name"].lower()
-                        correct_name_chinese = game_data["character"]["fullNameChinese"].lower()
-                        aliases = game_data["character"].get("aliases", [])
+                        correct_name_abbr = game_session.game_data["character"]["name"].lower()
+                        correct_name_chinese = game_session.game_data["character"]["fullNameChinese"].lower()
+                        aliases = game_session.game_data["character"].get("aliases", [])
                         
                         # 检查是否匹配任何一个可能的答案（缩写、中文名称、别名）
                         is_correct = answer_name == correct_name_abbr or answer_name == correct_name_chinese
@@ -822,45 +921,49 @@ class GuessCardPlugin(Star):  # type: ignore
                                     break
 
                         if is_correct:
-                            winner_id = answer_event.get_sender_id()
                             winner_name = answer_event.get_sender_name()
-                            score = game_data["score"]
+                            score = game_session.game_data["score"]
                             
-                            self._update_stats(winner_id, winner_name, score, correct=True)
+                            # 无论之前是否统计过，答对都更新统计
+                            self._update_stats(user_id, winner_name, score, correct=True)
+                            game_session.user_stats_recorded.add(user_id)
 
                             # 记录胜利者信息，但不立即发送消息
-                            winner_info = {"name": winner_name, "id": winner_id, "score": score}
+                            game_session.winner_info = {"name": winner_name, "id": user_id, "score": score}
 
                             controller.stop()
                             return # 回答正确，直接退出
                         else:
-                            self._update_stats(answer_event.get_sender_id(), answer_event.get_sender_name(), 0, correct=False)
+                            # 只在用户本局首次作答时统计错误
+                            if user_id not in game_session.user_stats_recorded:
+                                self._update_stats(user_id, answer_event.get_sender_name(), 0, correct=False)
+                                game_session.user_stats_recorded.add(user_id)
                     except (ValueError, IndexError):
                         pass
 
                     # 如果达到猜测次数上限，则结束游戏
-                    if guess_attempts_count >= max_guess_attempts:
-                        game_ended_by_attempts = True
+                    if game_session.guess_attempts_count >= max_guess_attempts:
+                        game_session.game_ended_by_attempts = True
                         controller.stop()
 
             try:
                 await guess_waiter(event)
             except TimeoutError:
-                game_ended_by_timeout = True
+                game_session.game_ended_by_timeout = True
             
             # 记录游戏结束时间，无论游戏如何结束
             self.last_game_end_time[session_id] = time.time()
 
             # --- 统一在游戏结束后公布结果 ---
-            correct_name = game_data['character']['fullNameChinese']
+            correct_name = game_session.game_data['character']['fullNameChinese']
 
             text_msg = []
-            if winner_info:
-                text_msg.append(Comp.Plain(f"{winner_info['name']}答对了呢!获得了{winner_info['score']}分！继续加油哦~\n正确答案是: {correct_name}"))
-            elif game_ended_by_attempts:
+            if game_session.winner_info:
+                text_msg.append(Comp.Plain(f"{game_session.winner_info['name']}答对了呢!获得了{game_session.winner_info['score']}分！继续加油哦~\n正确答案是: {correct_name}"))
+            elif game_session.game_ended_by_attempts:
                 text_msg.append(Comp.Plain(f"哎呀，本轮猜测次数已经用完了呢~ 没关系，下次一定可以的！\n"))
                 text_msg.append(Comp.Plain(f"正确答案是: {correct_name}\n"))
-            elif game_ended_by_timeout:
+            elif game_session.game_ended_by_timeout:
                 text_msg.append(Comp.Plain("时间到啦~ 大家有没有猜出来呢？\n"))
                 text_msg.append(Comp.Plain(f"正确答案是: {correct_name}\n"))
             
@@ -874,6 +977,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 # 处理远程图片，确保发送本地文件
                 if isinstance(card_image_source, str) and card_image_source.startswith(('http://', 'https://')):
                     # 下载远程图片到本地
+                    img = None
                     try:
                         img = await self._open_image(card_image_source)
                         if img:
@@ -883,6 +987,9 @@ class GuessCardPlugin(Star):  # type: ignore
                             image_msg.append(Comp.Image(file=str(img_path)))
                     except Exception as e:
                         logger.error(f"下载远程答案图片失败: {e}")
+                    finally:
+                        if img:
+                            img.close()
                 else:
                     # 本地图片直接发送
                     image_msg.append(Comp.Image(file=str(card_image_source)))
@@ -891,8 +998,11 @@ class GuessCardPlugin(Star):  # type: ignore
                 yield event.chain_result(image_msg)
 
         finally:
-            if session_id in self.context.active_game_sessions:
-                self.context.active_game_sessions.remove(session_id)
+            if session_id in self.active_game_sessions:
+                self.active_game_sessions.remove(session_id)
+            # 清理游戏会话状态
+            if session_id in self.game_sessions:
+                del self.game_sessions[session_id]
             # 不再删除锁实例，保留锁以维持互斥机制
 
 
@@ -912,7 +1022,7 @@ class GuessCardPlugin(Star):  # type: ignore
         yield event.plain_result(help_text)
 
 
-    @filter.command("猜卡面分数", alias={"gcscore", "猜卡分数"})
+    @filter.command("猜卡面分数", alias={"pjsk猜卡面分数", "猜卡分数"})
     async def show_user_score(self, event: AstrMessageEvent):
         """显示玩家自己的猜卡积分和统计数据"""
         if not self._is_group_allowed(event):
@@ -979,7 +1089,7 @@ class GuessCardPlugin(Star):  # type: ignore
             yield event.plain_result(f"哎呀，没有找到用户 {target_id_str} 的游戏记录呢~ 是不是ID输入错了呀？")
 
 
-    @filter.command("猜卡面排行榜", alias={"gcrank", "gctop"})
+    @filter.command("猜卡面排行榜", alias={"猜卡排行榜", "pjsk猜卡面排行榜"})
     async def show_ranking(self, event: AstrMessageEvent):
         """显示猜卡排行榜"""
         if not self._is_group_allowed(event):
