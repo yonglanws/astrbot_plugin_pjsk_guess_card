@@ -10,13 +10,21 @@
 
 ### 图片效果系统
 - **轻度模糊**：轻微的高斯模糊效果（1分）
+  <img width="800" height="492" alt="mohu1" src="https://github.com/user-attachments/assets/a2a17b3f-b49e-4e73-860b-bd4a1c3355f6" />
+
 - **重度模糊**：高强度高斯模糊效果（3分）
+  <img width="800" height="492" alt="mohu2" src="https://github.com/user-attachments/assets/542cbaf1-9257-46ab-a11f-01e691f83886" />
+
 - **分块打乱(简易)**：较大方块的随机排列（2分）
+  <img width="800" height="492" alt="daluan1" src="https://github.com/user-attachments/assets/ce393de2-cd76-4e0f-ac42-9be02f0ebc1a" />
+
 - **分块打乱(困难)**：较小方块的随机排列（5分）
+  <img width="800" height="457" alt="daluan2" src="https://github.com/user-attachments/assets/5db09c97-7e0e-4f3b-8122-d92d9f13ed79" />
+
 - **损坏效果**：剧烈的撕裂和噪点效果（4分）
+  <img width="800" height="492" alt="sunhuai" src="https://github.com/user-attachments/assets/89d78ab3-f198-482b-9699-9d6b55e82bc3" />
 
-![gc1](https://github.com/user-attachments/assets/d3b42a80-8bc3-48b7-afe3-966fd272b036)
-
+  
 **注意**：本插件所有必需的图片和数据资源均托管在服务器，并已经默认配置，不需要下载（日后可能会上传资源下载供本地使用），资源截止至日服v5.4.0版本
 
 ## 2. 指令列表
