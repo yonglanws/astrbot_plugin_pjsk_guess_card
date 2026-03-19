@@ -267,7 +267,7 @@ class ImageEffectProcessor:
         
         # 1. 增加撕裂效果
         for _ in range(num_glitches):
-            if random.random() < 0.6:
+            if random.random() < 0.8:
                 # 更大范围的水平撕裂
                 y = random.randint(0, h - 1)
                 shift = random.randint(-30, 30)
@@ -275,7 +275,7 @@ class ImageEffectProcessor:
                     # 撕裂整行
                     for x in range(w):
                         result_pixels[x, y] = pixels[x, (y + shift) % h]
-            elif random.random() < 0.6:
+            elif random.random() < 0.8:
                 # 水平扫描线撕裂
                 y = random.randint(0, h - 1)
                 # 撕裂多行
@@ -307,13 +307,13 @@ class ImageEffectProcessor:
             else:
                 # 2. 增加大量噪点
                 # 随机块噪点，确保小尺寸图片也能正常处理
-                max_y_offset = max(0, h - 20)
-                max_x_offset = max(0, w - 20)
+                max_y_offset = max(0, h - 30)
+                max_x_offset = max(0, w - 30)
                 y = random.randint(0, max_y_offset)
                 x = random.randint(0, max_x_offset)
-                max_block_size = min(20, h - y, w - x)
-                if max_block_size >= 8:
-                    block_size = random.randint(8, max_block_size)
+                max_block_size = min(30, h - y, w - x)
+                if max_block_size >= 10:
+                    block_size = random.randint(10, max_block_size)
                     for dy in range(block_size):
                         for dx in range(block_size):
                             if img.mode == 'RGB':
@@ -323,7 +323,20 @@ class ImageEffectProcessor:
                             else:
                                 result_pixels[x + dx, y + dy] = random.randint(0, 255)
         
-        # 3. 减弱色彩偏移效果，降低饱和度
+        # 3. 增加额外的噪点层
+        # 随机像素噪点
+        num_noise_pixels = int(w * h * intensity * 0.1)
+        for _ in range(num_noise_pixels):
+            x = random.randint(0, w - 1)
+            y = random.randint(0, h - 1)
+            if img.mode == 'RGB':
+                result_pixels[x, y] = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+            elif img.mode == 'RGBA':
+                result_pixels[x, y] = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+            else:
+                result_pixels[x, y] = random.randint(0, 255)
+        
+        # 4. 减弱色彩偏移效果，降低饱和度
         for _ in range(int(h * intensity * 0.3)):  # 减少色彩偏移的数量
             y = random.randint(0, h - 1)
             offset = random.randint(-3, 3)
