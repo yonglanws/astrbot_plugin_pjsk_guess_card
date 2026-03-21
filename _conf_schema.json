@@ -20,6 +20,15 @@
     "default": [],
     "hint": "在此处添加管理员的QQ号（字符串形式），他们将有权限使用特殊指令，例如重置用户游戏次数。"
   },
+  "blacklist": {
+    "description": "黑名单用户ID列表",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [],
+    "hint": "在此处添加被拉黑用户的QQ号（字符串形式），这些用户将无法使用猜卡功能。"
+  },
   "group_whitelist": {
     "description": "群聊白名单",
     "type": "list",
@@ -151,7 +160,7 @@
           },
           "difficulty": {
             "type": "int", 
-            "default": 4,
+            "default": 1,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
@@ -185,6 +194,56 @@
             "default": 1,
             "description": "损坏强度",
             "hint": "控制损坏效果的强度，值越大损坏越剧烈"
+          }
+        }
+      },
+      "horizontal_slice": {
+        "description": "横向切割效果配置",
+        "type": "object",
+        "default": {},
+        "items": {
+          "enabled": {
+            "type": "bool", 
+            "default": true,
+            "description": "是否启用",
+            "hint": "勾选此项以启用横向切割效果"
+          },
+          "difficulty": {
+            "type": "int", 
+            "default": 1,
+            "description": "分数",
+            "hint": "控制猜对时获得的分数"
+          },
+          "slice_count": {
+            "type": "int", 
+            "default": 8,
+            "description": "切割数量",
+            "hint": "控制将图片切割为多少个长条"
+          }
+        }
+      },
+      "vertical_slice": {
+        "description": "纵向切割效果配置",
+        "type": "object",
+        "default": {},
+        "items": {
+          "enabled": {
+            "type": "bool", 
+            "default": true,
+            "description": "是否启用",
+            "hint": "勾选此项以启用纵向切割效果"
+          },
+          "difficulty": {
+            "type": "int", 
+            "default": 1,
+            "description": "分数",
+            "hint": "控制猜对时获得的分数"
+          },
+          "slice_count": {
+            "type": "int", 
+            "default": 8,
+            "description": "切割数量",
+            "hint": "控制将图片切割为多少个长条"
           }
         }
       }

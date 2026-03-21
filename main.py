@@ -62,7 +62,7 @@ except ImportError:
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "1.5.0" 
+PLUGIN_VERSION = "1.6.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
@@ -75,7 +75,7 @@ def get_db_path(context: Context, plugin_dir: Path) -> str:
 
 
 def init_db(db_path: str):
-    """初始化数据库和表"""
+    """初始化数据库和表，支持数据库升级"""
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -83,6 +83,7 @@ def init_db(db_path: str):
             CREATE TABLE IF NOT EXISTS user_stats (
                 user_id TEXT PRIMARY KEY,
                 user_name TEXT,
+                custom_name TEXT,
                 score INTEGER DEFAULT 0,
                 attempts INTEGER DEFAULT 0,
                 correct_attempts INTEGER DEFAULT 0,
@@ -91,6 +92,11 @@ def init_db(db_path: str):
             )
             """
         )
+        # 检查并添加 custom_name 列（用于数据库升级）
+        cursor.execute("PRAGMA table_info(user_stats)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if 'custom_name' not in columns:
+            cursor.execute("ALTER TABLE user_stats ADD COLUMN custom_name TEXT")
         conn.commit()
 
 # --- 卡牌数据加载 ---
@@ -191,6 +197,20 @@ class ImageEffectProcessor:
             "difficulty": 3,
             "glitch_intensity": 1,
             "enabled": True
+        },
+        "horizontal_slice": {
+            "name": "横向切割",
+            "description": "将图片按横向切割为多个长条并随机打乱重排",
+            "difficulty": 1,
+            "slice_count": 8,
+            "enabled": True
+        },
+        "vertical_slice": {
+            "name": "纵向切割",
+            "description": "将图片按纵向切割为多个长条并随机打乱重排",
+            "difficulty": 1,
+            "slice_count": 8,
+            "enabled": True
         }
     }
     
@@ -224,6 +244,9 @@ class ImageEffectProcessor:
                 if "glitch_intensity" in effect_config:
                     self.EFFECTS[effect_name]["glitch_intensity"] = effect_config["glitch_intensity"]
                     logger.info(f"设置 {effect_name} 损坏强度: {effect_config['glitch_intensity']}")
+                if "slice_count" in effect_config:
+                    self.EFFECTS[effect_name]["slice_count"] = effect_config["slice_count"]
+                    logger.info(f"设置 {effect_name} 切割数量: {effect_config['slice_count']}")
         
         # 输出最终的效果配置
         logger.info(f"最终效果配置: {self.EFFECTS}")
@@ -422,6 +445,68 @@ class ImageEffectProcessor:
         
         return result
     
+    @classmethod
+    def apply_horizontal_slice(cls, img, slice_count=8):
+        """应用横向切割效果：将图片横向切割为多个等宽长条并随机打乱重排"""
+        try:
+            w, h = img.size
+            slice_height = h // slice_count
+            slices = []
+            
+            # 切割图片为多个横向长条
+            for i in range(slice_count):
+                y_start = i * slice_height
+                # 最后一个长条可能高度不同，确保覆盖整个图片
+                y_end = (i + 1) * slice_height if i < slice_count - 1 else h
+                slice_img = img.crop((0, y_start, w, y_end))
+                slices.append(slice_img)
+            
+            # 随机打乱长条顺序
+            random.shuffle(slices)
+            
+            # 合并长条为一张新图片
+            result = Image.new(img.mode, (w, h))
+            y_offset = 0
+            for slice_img in slices:
+                result.paste(slice_img, (0, y_offset))
+                y_offset += slice_img.size[1]
+            
+            return result
+        except Exception as e:
+            logger.error(f"横向切割处理失败: {e}", exc_info=True)
+            return img
+    
+    @classmethod
+    def apply_vertical_slice(cls, img, slice_count=8):
+        """应用纵向切割效果：将图片纵向切割为多个等高长条并随机打乱重排"""
+        try:
+            w, h = img.size
+            slice_width = w // slice_count
+            slices = []
+            
+            # 切割图片为多个纵向长条
+            for i in range(slice_count):
+                x_start = i * slice_width
+                # 最后一个长条可能宽度不同，确保覆盖整个图片
+                x_end = (i + 1) * slice_width if i < slice_count - 1 else w
+                slice_img = img.crop((x_start, 0, x_end, h))
+                slices.append(slice_img)
+            
+            # 随机打乱长条顺序
+            random.shuffle(slices)
+            
+            # 合并长条为一张新图片
+            result = Image.new(img.mode, (w, h))
+            x_offset = 0
+            for slice_img in slices:
+                result.paste(slice_img, (x_offset, 0))
+                x_offset += slice_img.size[0]
+            
+            return result
+        except Exception as e:
+            logger.error(f"纵向切割处理失败: {e}", exc_info=True)
+            return img
+    
     def apply_effect(self, img, effect_name, **kwargs):
         """应用指定的图片效果"""
         if effect_name == "none":
@@ -441,6 +526,12 @@ class ImageEffectProcessor:
         elif effect_name == "glitch":
             intensity = kwargs.get("glitch_intensity", self.EFFECTS["glitch"]["glitch_intensity"])
             return self.apply_glitch(img, intensity)
+        elif effect_name == "horizontal_slice":
+            slice_count = kwargs.get("slice_count", self.EFFECTS["horizontal_slice"]["slice_count"])
+            return self.apply_horizontal_slice(img, slice_count)
+        elif effect_name == "vertical_slice":
+            slice_count = kwargs.get("slice_count", self.EFFECTS["vertical_slice"]["slice_count"])
+            return self.apply_vertical_slice(img, slice_count)
         return img
     
     def apply_effects(self, img, effect_names):
@@ -522,6 +613,9 @@ class GuessCardPlugin(Star):  # type: ignore
         # 统一白名单类型为字符串集合
         self._normalize_group_whitelist()
         
+        # 统一黑名单类型为字符串集合
+        self._normalize_blacklist()
+        
         # 校验远程资源URL配置
         self._validate_remote_resource_url()
 
@@ -576,6 +670,23 @@ class GuessCardPlugin(Star):  # type: ignore
         """统一白名单类型为字符串集合"""
         whitelist = self.config.get("group_whitelist", [])
         self.group_whitelist = {str(x) for x in whitelist}
+
+    def _normalize_blacklist(self):
+        """统一黑名单类型为字符串集合"""
+        blacklist = self.config.get("blacklist", [])
+        self.blacklist = {str(x) for x in blacklist}
+
+    def _is_user_blacklisted(self, user_id: str) -> bool:
+        """检查用户是否在黑名单中"""
+        # 重新读取配置以支持热加载
+        self._normalize_blacklist()
+        return str(user_id) in self.blacklist
+
+    def _get_display_name(self, user_id: str, original_name: Optional[str] = None) -> str:
+        """获取用户显示名称，黑名单用户显示统一标识"""
+        if self._is_user_blacklisted(user_id):
+            return "[此用户已被BOT拉黑]"
+        return original_name if original_name else "未知用户"
 
     def _validate_remote_resource_url(self):
         """校验远程资源URL配置合法性"""
@@ -832,6 +943,11 @@ class GuessCardPlugin(Star):  # type: ignore
         if not self._is_group_allowed(event):
             return
             
+        user_id = event.get_sender_id()
+        if self._is_user_blacklisted(user_id):
+            yield event.plain_result("抱歉，你已被禁止使用猜卡功能 😔")
+            return
+            
         session_id = event.unified_msg_origin
 
         # --- 锁定会话以防止竞态条件 ---
@@ -897,7 +1013,7 @@ class GuessCardPlugin(Star):  # type: ignore
             difficulty_stars = "⭐" * difficulty
             
             intro_text = f"嗨嗨！来玩猜卡面游戏吧！\n请在{timeout_seconds}秒内发送角色名称缩写进行回答哦(无需@机器人)\n"
-            effect_text = f"🎨 图片效果: {effect_name}\n💎 猜对得分: {difficulty}分\n"
+            effect_text = f"🎨 本轮图片效果: {effect_name}\n💎 猜对得分: {difficulty}分\n"
             
             hint_text = "\n".join(hints) + "\n" if hints else ""
             
@@ -1048,10 +1164,11 @@ class GuessCardPlugin(Star):  # type: ignore
         help_text = (
             "✨ PJSK猜卡面指南 ✨\n\n"
             "基础指令\n"
-            "pjsk猜卡面 - 随机猜一张卡，看看你能不能认出来！\n\n"
+            "猜卡面 - 随机猜一张卡，看看你能不能认出来！\n\n"
             "数据统计\n"
             "猜卡面排行榜 - 查看猜卡总分排行榜，看看谁是猜卡大师！\n"
-            "猜卡面分数 - 查看自己的猜卡数据统计，了解自己的进步~\n\n"
+            "猜卡面分数 - 查看自己的猜卡数据统计，了解自己的进步~\n"
+            "猜卡面自定义名称 - 设置你的个性化ID（不带参数可清除）\n\n"
         )
         yield event.plain_result(help_text)
 
@@ -1062,7 +1179,11 @@ class GuessCardPlugin(Star):  # type: ignore
         if not self._is_group_allowed(event):
             return
         user_id = event.get_sender_id()
+        if self._is_user_blacklisted(user_id):
+            yield event.plain_result("抱歉，你已被禁止使用猜卡功能 😔")
+            return
         user_name = event.get_sender_name()
+        display_name = self._get_display_name(user_id, user_name)
         
         with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
@@ -1093,7 +1214,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 remaining_plays = f"{daily_limit}次"
         
         stats_text = (
-            f"✨ {user_name} 的猜卡数据 ✨\n"
+            f"✨ {display_name} 的猜卡数据 ✨\n"
             f"🏆 总分: {score} 分\n"
             f"🎯 正确率: {accuracy:.1f}%\n"
             f"🎮 游戏次数: {attempts} 次\n"
@@ -1104,6 +1225,48 @@ class GuessCardPlugin(Star):  # type: ignore
         
         yield event.plain_result(stats_text)
 
+
+    @filter.command("猜卡面自定义名称", alias={"自定义名称", "猜卡自定义名称"})
+    async def set_custom_name(self, event: AstrMessageEvent):
+        """设置玩家自定义ID"""
+        if not self._is_group_allowed(event):
+            return
+
+        sender_id = event.get_sender_id()
+        if self._is_user_blacklisted(sender_id):
+            yield event.plain_result("抱歉，你已被禁止使用猜卡功能 😔")
+            return
+        # 解析命令参数，获取自定义名称
+        parts = event.message_str.strip().split(maxsplit=1)
+        custom_name = parts[1].strip() if len(parts) > 1 else None
+        
+        with closing(self.get_conn()) as conn:
+            cursor = conn.cursor()
+            
+            if custom_name:
+                # 设置自定义名称
+                cursor.execute("SELECT user_id FROM user_stats WHERE user_id = ?", (sender_id,))
+                if cursor.fetchone():
+                    cursor.execute("UPDATE user_stats SET custom_name = ? WHERE user_id = ?", (custom_name, sender_id))
+                else:
+                    # 如果用户没有记录，创建一个新记录
+                    today = time.strftime("%Y-%m-%d")
+                    sender_name = event.get_sender_name()
+                    cursor.execute(
+                        "INSERT INTO user_stats (user_id, user_name, custom_name, last_play_date, daily_plays) VALUES (?, ?, ?, ?, ?)",
+                        (sender_id, sender_name, custom_name, today, 0)
+                    )
+                conn.commit()
+                yield event.plain_result(f"好的！你的猜卡面自定义名称已设置为：{custom_name} ✨")
+            else:
+                # 清除自定义名称
+                cursor.execute("SELECT user_id FROM user_stats WHERE user_id = ?", (sender_id,))
+                if cursor.fetchone():
+                    cursor.execute("UPDATE user_stats SET custom_name = NULL WHERE user_id = ?", (sender_id,))
+                    conn.commit()
+                    yield event.plain_result("好的！你的自定义名称已清除，将显示QQ名称 ✨")
+                else:
+                    yield event.plain_result("你还没有参与过猜卡游戏，暂无自定义名称哦~ 🎮")
 
     @filter.command("重置猜卡面次数", alias={"resetgl"})
     async def reset_guess_limit(self, event: AstrMessageEvent):
@@ -1148,7 +1311,7 @@ class GuessCardPlugin(Star):  # type: ignore
         with closing(self.get_conn()) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                f"SELECT user_id, user_name, score, attempts, correct_attempts FROM user_stats ORDER BY score DESC LIMIT ?",
+                f"SELECT user_id, user_name, custom_name, score, attempts, correct_attempts FROM user_stats ORDER BY score DESC LIMIT ?",
                 (ranking_count,)
             )
             rows = cursor.fetchall()
@@ -1170,7 +1333,7 @@ class GuessCardPlugin(Star):  # type: ignore
     def _render_ranking_image(self, rows: list, ranking_count: int = 10) -> Optional[str]:
         """渲染排行榜图片（同步方法），支持动态高度调整"""
         try:
-            width = 650
+            width = 850
             # 动态计算高度：基础高度 + 每个排名项的高度
             base_height = 250
             item_height = 70
@@ -1186,17 +1349,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 b = int(bg_color_start[2] + (bg_color_end[2] - bg_color_start[2]) * y / height)
                 draw_bg.line([(0, y), (width, y)], fill=(r, g, b))
             
-            background_path = self.resources_dir / "ranking_bg.png"
-            if ranking_count == 10 and background_path.exists():
-                try:
-                    with Image.open(background_path) as custom_bg:
-                        custom_bg = custom_bg.convert("RGBA")
-                        custom_bg = custom_bg.resize((width, height), LANCZOS)
-                        custom_bg.putalpha(128)
-                        img = img.convert("RGBA")
-                        img = Image.alpha_composite(img, custom_bg)
-                except Exception as e:
-                    logger.warning(f"加载或混合自定义背景图片失败: {e}. 将仅使用默认背景。")
+
 
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
@@ -1204,7 +1357,7 @@ class GuessCardPlugin(Star):  # type: ignore
             white_overlay = Image.new("RGBA", img.size, (255, 255, 255, 100))
             img = Image.alpha_composite(img, white_overlay)
 
-            title_text = "PJSK猜卡排行榜"
+            title_text = "PJSK猜卡面排行榜"
             font_color = (30, 30, 50)
             shadow_color = (180, 180, 190, 128)
             header_color = (80, 90, 120)
@@ -1223,7 +1376,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 pilmoji.text((center_x, title_y), title_text, font=title_font, fill=font_color, anchor="mm", emoji_position_offset=(0, 6))
 
                 headers = ["排名", "玩家", "总分", "正确率", "总次数"]
-                col_positions_header = [40, 120, 320, 450, 560]
+                col_positions_header = [40, 150, 480, 610, 720]
                 title_height = pilmoji.getsize(title_text, font=title_font)[1]
                 current_y = title_y + int(title_height / 2) + 45
                 for header in headers:
@@ -1233,12 +1386,14 @@ class GuessCardPlugin(Star):  # type: ignore
 
                 rank_icons = ["🥇", "🥈", "🥉"]
                 for i, row in enumerate(rows):
-                    user_id, user_name, score, attempts, correct_attempts = str(row[0]), row[1], str(row[2]), str(row[3]), row[4]
+                    user_id, user_name, custom_name, score, attempts, correct_attempts = str(row[0]), row[1], row[2], str(row[3]), str(row[4]), row[5]
+                    # 优先使用自定义名称，如果没有则使用QQ名称，黑名单用户显示统一标识
+                    display_name = self._get_display_name(user_id, custom_name if custom_name else user_name)
                     accuracy = f"{(correct_attempts * 100 / int(attempts) if int(attempts) > 0 else 0):.1f}%"
                     
                     rank = i + 1
-                    col_positions = [40, 120, 320, 450, 560]
-                    rank_num_align_x = 100
+                    col_positions = [40, 150, 480, 610, 720]
+                    rank_num_align_x = 130
 
                     pilmoji.text((rank_num_align_x, current_y), str(rank), font=body_font, fill=font_color, anchor="ra")
 
@@ -1246,12 +1401,12 @@ class GuessCardPlugin(Star):  # type: ignore
                         pilmoji.text((col_positions[0], current_y - 30), rank_icons[i], font=medal_font, fill=font_color)
                     
                     max_name_width = col_positions[2] - col_positions[1] - 20
-                    if body_font.getbbox(user_name)[2] > max_name_width:
-                        while body_font.getbbox(user_name + "...")[2] > max_name_width and len(user_name) > 0:
-                            user_name = user_name[:-1]
-                        user_name += "..."
+                    if body_font.getbbox(display_name)[2] > max_name_width:
+                        while body_font.getbbox(display_name + "...")[2] > max_name_width and len(display_name) > 0:
+                            display_name = display_name[:-1]
+                        display_name += "..."
                     
-                    pilmoji.text((col_positions[1], current_y), user_name, font=body_font, fill=font_color)
+                    pilmoji.text((col_positions[1], current_y), display_name, font=body_font, fill=font_color)
                     pilmoji.text((col_positions[1], current_y + 32), f"ID: {user_id}", font=id_font, fill=header_color)
                     pilmoji.text((col_positions[2], current_y), score, font=body_font, fill=score_color)
                     pilmoji.text((col_positions[3], current_y), accuracy, font=body_font, fill=accuracy_color)

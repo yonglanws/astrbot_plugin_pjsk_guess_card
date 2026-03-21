@@ -6,6 +6,8 @@
 
 本插件是使用《初音未来 缤纷舞台》的卡面资源制作的猜卡面游戏。插件会随机展示一张经过特殊效果处理的角色卡面图片，并给出少量的提示(花前/花后，星级)，玩家需要在规定时间内根据图片和提示猜出正确的角色名称。
 
+本插件已经过压力测试（？）（指1小时被玩了2000多次猜卡面）已经做到稳定使用，无明显bug
+
 插件内置了猜卡面排行榜、每日游戏次数限制、游戏冷却等功能。
 
 ### 图片效果系统
@@ -24,10 +26,13 @@
 
 
 - **损坏效果**：剧烈的撕裂和噪点效果（3分）
-  <img width="800" height="492" alt="22e5b04100ef95bfeedb75fb0608ff76" src="https://github.com/user-attachments/assets/bce7ed3c-8897-4b8c-8d8c-611ea44715c2" />
+  <img width="800" height="492" alt="22e5b04100ef95bfeedb75fb0608ff76" src="https://github.com/user-attachments/assets/bce7ed3c-8897-4b8c-8d8c-611ea44715c" />
+
+- **横向切割**：将图片按横向切割为多个长条并随机打乱重排（1分）
+
+- **纵向切割**：将图片按纵向切割为多个长条并随机打乱重排（1分）
 
 
-  
 **注意**：本插件所有必需的图片和数据资源均托管在服务器，并已经默认配置，不需要下载（日后可能会上传资源下载供本地使用），资源截止至日服v5.4.0版本
 
 ## 2. 指令列表
@@ -39,6 +44,7 @@
 - `猜卡面帮助`: 显示本帮助信息。
 - `猜卡面排行榜` : 查看猜卡总分排行榜。
 - `猜卡面分数` : 查看自己的猜卡数据统计。
+- `猜卡面自定义名称` : 设置玩家自定义ID，排行榜将优先显示自定义ID（不带参数可清除自定义ID）。
 
 ### 管理员指令
 - `重置猜卡面次数` `[用户ID]`: 重置指定用户（或自己）的每日游戏次数。
@@ -48,31 +54,11 @@
 
 插件的配置由机器人管理员通过 AstrBot 框架提供的 **WebUI 界面**进行修改。以下是可配置的选项说明：
 
-```json
-{
-  "group_whitelist": [],
-  "super_users": [],
-  "answer_timeout": 300,
-  "daily_play_limit": 10,
-  "game_cooldown_seconds": 60,
-  "max_guess_attempts": 10,
-  "remote_resource_url_base": "http://47.110.56.9",
-  "use_local_resources": false,
-  "ranking_display_count": 10,
-  "effects": {
-    "light_blur": {"enabled": true, "difficulty": 2, "blur_radius": 15},
-    "heavy_blur": {"enabled": true, "difficulty": 3, "blur_radius": 40},
-    "shuffle_blocks_easy": {"enabled": true, "difficulty": 1, "block_size": 65},
-    "shuffle_blocks_hard": {"enabled": true, "difficulty": 5, "block_size": 20},
-    "glitch": {"enabled": true, "difficulty": 4, "glitch_intensity": 1}
-  }
-}
-```
-
 ### 基础配置
 
 - `group_whitelist` (列表): **群聊白名单**。只有在此列表中的群号才能使用本插件。若列表为空 `[]`，则对所有群聊生效。
 - `super_users` (列表): **管理员用户ID列表**。
+- `blacklist` (列表): **黑名单用户ID列表**。在此列表中的用户将被禁止使用猜卡功能，且排行榜显示统一标识。
 - `answer_timeout` (整数): 每轮游戏的回答**超时时间**（秒）。
 - `daily_play_limit` (整数): 每个用户每天可以**发起游戏**的最大次数（-1表示无限制）。
 - `game_cooldown_seconds` (整数): 游戏结束后的**冷却时间**（秒）。
@@ -110,6 +96,16 @@
 - `difficulty` (整数): 分数，控制猜对时获得的分数
 - `glitch_intensity` (整数): 损坏强度，控制损坏效果的强度，值越大损坏越剧烈
 
+#### 横向切割
+- `enabled` (布尔): 是否启用横向切割效果
+- `difficulty` (整数): 分数，控制猜对时获得的分数
+- `slice_count` (整数): 切割数量，控制将图片切割为多少个长条
+
+#### 纵向切割
+- `enabled` (布尔): 是否启用纵向切割效果
+- `difficulty` (整数): 分数，控制猜对时获得的分数
+- `slice_count` (整数): 切割数量，控制将图片切割为多少个长条
+
 ## 4.更新日志
 
 ### TODO
@@ -119,6 +115,12 @@
 ~~- [ ] 增加游戏难度设置，难度更高的游戏会增加卡面的模糊程度/增加更多负面效果~~
 
 - [x] 角色名称增加别名，例如“糖”可以代替“晓山瑞希”
+
+### v1.6.0
+- 新增横向切割和纵向切割两种图片效果，将图片切割为多个长条后随机打乱重排
+- 新增玩家自定义ID功能，通过"猜卡面自定义名称"指令设置个人自定义ID
+- 排行榜系统支持显示玩家自定义ID，优先显示自定义名称，未设定时显示QQ名称
+- 新增用户黑名单功能，可通过配置文件禁用特定用户的猜卡功能
 
 ### v1.5.0
 - 新增效果参数可配置功能，现在可以在WebUI中配置各效果的启用状态和分数，以及模糊半径、区块大小、损坏强度等详细参数
