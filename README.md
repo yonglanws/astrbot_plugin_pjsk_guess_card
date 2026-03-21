@@ -20,18 +20,17 @@
 - **分块打乱(简易)**：较大方块的随机排列（1分）
   <img width="800" height="457" alt="03507283e5565746a5773e34f6005fc2" src="https://github.com/user-attachments/assets/16417c3f-93eb-43cd-be3c-de76e99f9b80" />
 
-
 - **分块打乱(困难)**：较小方块的随机排列（4分）
   <img width="800" height="492" alt="f7d037b3898764bd56822552d65351fe" src="https://github.com/user-attachments/assets/fb4af477-1560-4675-9de6-39b8982a2ff7" />
-
 
 - **损坏效果**：剧烈的撕裂和噪点效果（3分）
   <img width="800" height="492" alt="22e5b04100ef95bfeedb75fb0608ff76" src="https://github.com/user-attachments/assets/bce7ed3c-8897-4b8c-8d8c-611ea44715c" />
 
 - **横向切割**：将图片按横向切割为多个长条并随机打乱重排（1分）
+<img width="800" height="492" alt="bf05baebc378ef1c9a95972a49be119a" src="https://github.com/user-attachments/assets/54efb4dd-b48b-4a2e-904b-ce5a4f630b7f" />
 
 - **纵向切割**：将图片按纵向切割为多个长条并随机打乱重排（1分）
-
+<img width="800" height="492" alt="afa889d2e8a11f21f2873c9509048564" src="https://github.com/user-attachments/assets/eaa713bc-1ae7-4729-8cd5-88306ffda634" />
 
 **注意**：本插件所有必需的图片和数据资源均托管在服务器，并已经默认配置，不需要下载（日后可能会上传资源下载供本地使用），资源截止至日服v5.4.0版本
 
