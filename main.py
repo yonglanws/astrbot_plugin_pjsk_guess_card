@@ -787,13 +787,20 @@ class GuessCardPlugin(Star):  # type: ignore
         """
         if not self.group_whitelist:
             return True # 白名单为空, 允许所有
-        
+
         # 白名单不为空, 开始严格检查
         group_id = event.get_group_id()
         if group_id and str(group_id) in self.group_whitelist:
             return True # 是白名单中的群聊, 允许
-            
+
         return False # 是私聊, 或非白名单群聊, 均不允许
+
+    def _get_whitelist_reject_message(self) -> Optional[str]:
+        """获取白名单拒绝提示信息"""
+        msg = self.config.get("whitelist_reject_message", "")
+        if msg and msg.strip():
+            return msg.strip()
+        return None
 
     def get_conn(self) -> sqlite3.Connection:
         """获取数据库连接，设置超时防止锁冲突"""
@@ -941,6 +948,9 @@ class GuessCardPlugin(Star):  # type: ignore
     async def start_guess_card(self, event: AstrMessageEvent):
         """开始一轮猜卡游戏"""
         if not self._is_group_allowed(event):
+            reject_msg = self._get_whitelist_reject_message()
+            if reject_msg:
+                yield event.plain_result(reject_msg)
             return
             
         user_id = event.get_sender_id()
@@ -1012,8 +1022,8 @@ class GuessCardPlugin(Star):  # type: ignore
             difficulty = game_data.get("difficulty", 1)
             difficulty_stars = "⭐" * difficulty
             
-            intro_text = f"嗨嗨！来玩猜卡面游戏吧！\n请在{timeout_seconds}秒内发送角色名称缩写进行回答哦(无需@机器人)\n"
-            effect_text = f"🎨 本轮图片效果: {effect_name}\n💎 猜对得分: {difficulty}分\n"
+            intro_text = f"请在{timeout_seconds}秒内发送角色名称缩写进行回答哦(无需@机器人)\n"
+            effect_text = f"本轮图片效果: {effect_name}\n猜对得分: {difficulty}分\n"
             
             hint_text = "\n".join(hints) + "\n" if hints else ""
             
@@ -1037,10 +1047,17 @@ class GuessCardPlugin(Star):  # type: ignore
             game_session.game_data = game_data
             self.game_sessions[session_id] = game_session
             max_guess_attempts = self.config.get("max_guess_attempts", 10)
-
+            
+            winners_list = []  # 记录所有获奖者（用于奖励有效时间功能）
+            first_correct_time = None  # 记录第一个答对的时间
+            reward_valid_time = self.config.get("reward_valid_time", 0)  # 奖励有效时间配置
+            
+            logger.info(f"[猜卡面] 奖励有效时间配置: {reward_valid_time}秒")
 
             @session_waiter(timeout=timeout_seconds)  # type: ignore
             async def guess_waiter(controller: SessionController, answer_event: AstrMessageEvent):
+                nonlocal first_correct_time, winners_list
+                
                 answer_text = answer_event.message_str.strip()
                 
                 # 移除对!前缀的强制要求
@@ -1073,18 +1090,41 @@ class GuessCardPlugin(Star):  # type: ignore
                         if is_correct:
                             winner_name = answer_event.get_sender_name()
                             score = game_session.game_data["score"]
+                            current_time = time.time()
                             
-                            # 无论之前是否统计过，答对都更新统计
-                            self._update_stats(user_id, winner_name, score, correct=True)
-                            game_session.user_stats_recorded.add(user_id)
-
-                            # 记录胜利者信息，但不立即发送消息
-                            game_session.winner_info = {"name": winner_name, "id": user_id, "score": score}
-
-                            controller.stop()
-                            return # 回答正确，直接退出
+                            if not game_session.winner_info:
+                                first_correct_time = current_time
+                                
+                                game_session.winner_info = {"name": winner_name, "id": user_id, "score": score}
+                                
+                                winners_list.append({
+                                    'user_id': user_id,
+                                    'user_name': winner_name,
+                                    'answer_time': current_time,
+                                    'is_first': True
+                                })
+                                
+                                if reward_valid_time > 0:
+                                    logger.info(f"[猜卡面] 第一个答对者: {winner_name}，启动{reward_valid_time}秒奖励有效时间")
+                                    async def stop_after_delay():
+                                        await asyncio.sleep(reward_valid_time)
+                                        controller.stop()
+                                    asyncio.create_task(stop_after_delay())
+                                else:
+                                    controller.stop()
+                                    return
+                            else:
+                                time_since_first_correct = current_time - first_correct_time
+                                if time_since_first_correct <= reward_valid_time and reward_valid_time > 0:
+                                    if not any(w['user_id'] == user_id for w in winners_list):
+                                        winners_list.append({
+                                            'user_id': user_id,
+                                            'user_name': winner_name,
+                                            'answer_time': current_time,
+                                            'is_first': False
+                                        })
+                                        logger.info(f"[猜卡面] 奖励有效时间内额外答对: {winner_name} (+{time_since_first_correct:.2f}s)")
                         else:
-                            # 只在用户本局首次作答时统计错误
                             if user_id not in game_session.user_stats_recorded:
                                 self._update_stats(user_id, answer_event.get_sender_name(), 0, correct=False)
                                 game_session.user_stats_recorded.add(user_id)
@@ -1109,7 +1149,29 @@ class GuessCardPlugin(Star):  # type: ignore
 
             text_msg = []
             if game_session.winner_info:
-                text_msg.append(Comp.Plain(f"{game_session.winner_info['name']}答对了呢!获得了{game_session.winner_info['score']}分！继续加油哦~\n正确答案是: {correct_name}"))
+                if len(winners_list) == 1:
+                    self._update_stats(
+                        game_session.winner_info['id'],
+                        game_session.winner_info['name'],
+                        game_session.winner_info['score'],
+                        correct=True
+                    )
+                    text_msg.append(Comp.Plain(f"{game_session.winner_info['name']}答对了呢!获得了{game_session.winner_info['score']}分！继续加油哦~\n正确答案是: {correct_name}"))
+                else:
+                    winner_names = [w['user_name'] for w in winners_list]
+                    for winner in winners_list:
+                        self._update_stats(
+                            winner['user_id'],
+                            winner['user_name'],
+                            game_session.winner_info['score'],
+                            correct=True
+                        )
+                    text_msg.append(Comp.Plain(
+                        f"🎉 恭喜以下玩家答对！每人获得{game_session.winner_info['score']}分！\n"
+                        f"{'、'.join(winner_names)}\n\n"
+                        f"正确答案是: {correct_name}"
+                    ))
+                    
             elif game_session.game_ended_by_attempts:
                 text_msg.append(Comp.Plain(f"哎呀，本轮猜测次数已经用完了呢~ 没关系，下次一定可以的！\n"))
                 text_msg.append(Comp.Plain(f"正确答案是: {correct_name}\n"))
@@ -1160,6 +1222,9 @@ class GuessCardPlugin(Star):  # type: ignore
     async def show_guess_card_help(self, event: AstrMessageEvent):
         """显示猜卡插件帮助"""
         if not self._is_group_allowed(event):
+            reject_msg = self._get_whitelist_reject_message()
+            if reject_msg:
+                yield event.plain_result(reject_msg)
             return
         help_text = (
             "✨ PJSK猜卡面指南 ✨\n\n"
@@ -1177,6 +1242,9 @@ class GuessCardPlugin(Star):  # type: ignore
     async def show_user_score(self, event: AstrMessageEvent):
         """显示玩家自己的猜卡积分和统计数据"""
         if not self._is_group_allowed(event):
+            reject_msg = self._get_whitelist_reject_message()
+            if reject_msg:
+                yield event.plain_result(reject_msg)
             return
         user_id = event.get_sender_id()
         if self._is_user_blacklisted(user_id):
@@ -1185,7 +1253,7 @@ class GuessCardPlugin(Star):  # type: ignore
         user_name = event.get_sender_name()
         display_name = self._get_display_name(user_id, user_name)
         
-        with closing(self.get_conn()) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT score, attempts, correct_attempts, last_play_date, daily_plays FROM user_stats WHERE user_id = ?", (user_id,))
             user_data = cursor.fetchone()
@@ -1197,7 +1265,7 @@ class GuessCardPlugin(Star):  # type: ignore
         score, attempts, correct_attempts, last_play_date, daily_plays = user_data
         accuracy = (correct_attempts * 100 / attempts) if attempts > 0 else 0
         
-        with closing(self.get_conn()) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM user_stats WHERE score > ?", (score,))
             rank = cursor.fetchone()[0] + 1
@@ -1230,6 +1298,9 @@ class GuessCardPlugin(Star):  # type: ignore
     async def set_custom_name(self, event: AstrMessageEvent):
         """设置玩家自定义ID"""
         if not self._is_group_allowed(event):
+            reject_msg = self._get_whitelist_reject_message()
+            if reject_msg:
+                yield event.plain_result(reject_msg)
             return
 
         sender_id = event.get_sender_id()
@@ -1240,7 +1311,7 @@ class GuessCardPlugin(Star):  # type: ignore
         parts = event.message_str.strip().split(maxsplit=1)
         custom_name = parts[1].strip() if len(parts) > 1 else None
         
-        with closing(self.get_conn()) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             cursor = conn.cursor()
             
             if custom_name:
@@ -1272,6 +1343,9 @@ class GuessCardPlugin(Star):  # type: ignore
     async def reset_guess_limit(self, event: AstrMessageEvent):
         """重置用户猜卡次数（仅限管理员）"""
         if not self._is_group_allowed(event):
+            reject_msg = self._get_whitelist_reject_message()
+            if reject_msg:
+                yield event.plain_result(reject_msg)
             return
 
         sender_id = event.get_sender_id()
@@ -1298,17 +1372,20 @@ class GuessCardPlugin(Star):  # type: ignore
             yield event.plain_result(f"哎呀，没有找到用户 {target_id_str} 的游戏记录呢~ 是不是ID输入错了呀？")
 
 
-    @filter.command("猜卡面排行榜", alias={"猜卡排行榜", "pjsk猜卡面排行榜"})
+    @filter.command("猜卡面排行榜", alias={"猜卡排行榜", "本地猜卡排行榜"})
     async def show_ranking(self, event: AstrMessageEvent):
         """显示猜卡排行榜"""
         if not self._is_group_allowed(event):
+            reject_msg = self._get_whitelist_reject_message()
+            if reject_msg:
+                yield event.plain_result(reject_msg)
             return
 
         self._cleanup_output_dir()
 
         ranking_count = self.config.get("ranking_display_count", 10)
         
-        with closing(self.get_conn()) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 f"SELECT user_id, user_name, custom_name, score, attempts, correct_attempts FROM user_stats ORDER BY score DESC LIMIT ?",
@@ -1435,7 +1512,7 @@ class GuessCardPlugin(Star):  # type: ignore
     # --- 数据更新与检查 ---
     def _record_game_start(self, user_id: str, user_name: str):
         """记录一次游戏开始，增加该用户的每日游戏次数"""
-        with closing(self.get_conn()) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             cursor = conn.cursor()
             today = time.strftime("%Y-%m-%d")
 
@@ -1462,7 +1539,7 @@ class GuessCardPlugin(Star):  # type: ignore
 
     def _update_stats(self, user_id: str, user_name: str, score: int, correct: bool):
         """更新用户的得分和总尝试次数统计"""
-        with closing(self.get_conn()) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT score, attempts, correct_attempts FROM user_stats WHERE user_id = ?", (user_id,))
             user_data = cursor.fetchone()
@@ -1494,7 +1571,7 @@ class GuessCardPlugin(Star):  # type: ignore
         # 如果设置为-1，表示无限制
         if daily_limit == -1:
             return True
-        with closing(self.get_conn()) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             cursor = conn.cursor()
             today = time.strftime("%Y-%m-%d")
             cursor.execute("SELECT daily_plays, last_play_date FROM user_stats WHERE user_id = ?", (user_id,))
@@ -1505,7 +1582,7 @@ class GuessCardPlugin(Star):  # type: ignore
 
     def _reset_user_limit(self, user_id: str) -> bool:
         """重置指定用户的每日游戏次数"""
-        with closing(self.get_conn()) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT user_id FROM user_stats WHERE user_id = ?", (user_id,))
             if cursor.fetchone():

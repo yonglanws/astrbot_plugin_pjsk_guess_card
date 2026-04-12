@@ -2,7 +2,7 @@
   "answer_timeout": {
     "description": "猜卡游戏的答题时长（秒）",
     "type": "int",
-    "default": 300,
+    "default": 30,
     "hint": "设置玩家回答问题的超时时间，单位为秒。"
   },
   "daily_play_limit": {
@@ -37,6 +37,12 @@
     },
     "default": [],
     "hint": "在此处添加允许使用此插件的群聊ID。如果列表为空，则所有群聊都允许使用。"
+  },
+  "whitelist_reject_message": {
+    "description": "非白名单群聊的提示文本",
+    "type": "string",
+    "default": "⚠️ 抱歉，当前群聊未在白名单中，无法使用此功能。如需使用，请联系管理员将本群添加到白名单。",
+    "hint": "当非白名单群聊的用户尝试触发游戏时，向其显示的提示信息。留空则不提示。"
   },
   "game_cooldown_seconds": {
     "description": "游戏冷却时间（秒）。",
@@ -85,7 +91,7 @@
           },
           "difficulty": {
             "type": "int", 
-            "default": 2,
+            "default": 1,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
@@ -110,7 +116,7 @@
           },
           "difficulty": {
             "type": "int", 
-            "default": 3,
+            "default": 2,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
@@ -160,7 +166,7 @@
           },
           "difficulty": {
             "type": "int", 
-            "default": 1,
+            "default": 3,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
@@ -185,7 +191,7 @@
           },
           "difficulty": {
             "type": "int", 
-            "default": 3,
+            "default": 2,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
@@ -216,7 +222,7 @@
           },
           "slice_count": {
             "type": "int", 
-            "default": 8,
+            "default": 30,
             "description": "切割数量",
             "hint": "控制将图片切割为多少个长条"
           }
@@ -241,12 +247,18 @@
           },
           "slice_count": {
             "type": "int", 
-            "default": 8,
+            "default": 40,
             "description": "切割数量",
             "hint": "控制将图片切割为多少个长条"
           }
         }
       }
     }
+  },
+  "reward_valid_time": {
+    "description": "奖励有效时间（秒）",
+    "type": "int",
+    "default": 0,
+    "hint": "第一个玩家答对后，其他玩家在此时间内答对也能获得分数。设置为0表示禁用此功能（只有第一个答对者得分），设置为大于0的值表示启用功能并设定有效时间（单位：秒）。建议范围：3-15秒"
   }
 } 
