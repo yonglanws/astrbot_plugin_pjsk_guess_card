@@ -62,7 +62,7 @@ except ImportError:
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "1.6.0" 
+PLUGIN_VERSION = "1.7.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
@@ -1453,7 +1453,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 pilmoji.text((center_x, title_y), title_text, font=title_font, fill=font_color, anchor="mm", emoji_position_offset=(0, 6))
 
                 headers = ["排名", "玩家", "总分", "正确率", "总次数"]
-                col_positions_header = [40, 150, 480, 610, 720]
+                col_positions_header = [40, 150, 500, 610, 720]
                 title_height = pilmoji.getsize(title_text, font=title_font)[1]
                 current_y = title_y + int(title_height / 2) + 45
                 for header in headers:
@@ -1469,7 +1469,7 @@ class GuessCardPlugin(Star):  # type: ignore
                     accuracy = f"{(correct_attempts * 100 / int(attempts) if int(attempts) > 0 else 0):.1f}%"
                     
                     rank = i + 1
-                    col_positions = [40, 150, 480, 610, 720]
+                    col_positions = [40, 150, 500, 610, 720]
                     rank_num_align_x = 130
 
                     pilmoji.text((rank_num_align_x, current_y), str(rank), font=body_font, fill=font_color, anchor="ra")
@@ -1484,7 +1484,7 @@ class GuessCardPlugin(Star):  # type: ignore
                         display_name += "..."
                     
                     pilmoji.text((col_positions[1], current_y), display_name, font=body_font, fill=font_color)
-                    pilmoji.text((col_positions[1], current_y + 32), f"ID: {user_id}", font=id_font, fill=header_color)
+                    pilmoji.text((col_positions[1], current_y + 32), f"{user_name} ID: {user_id}", font=id_font, fill=header_color)
                     pilmoji.text((col_positions[2], current_y), score, font=body_font, fill=score_color)
                     pilmoji.text((col_positions[3], current_y), accuracy, font=body_font, fill=accuracy_color)
                     pilmoji.text((col_positions[4], current_y), attempts, font=body_font, fill=font_color)
