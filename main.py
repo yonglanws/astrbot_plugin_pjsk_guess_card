@@ -6,6 +6,7 @@ import time
 import os
 import sqlite3
 import io
+import difflib
 from contextlib import closing
 from pathlib import Path
 from typing import Optional, Union
@@ -62,7 +63,7 @@ except ImportError:
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "1.7.0" 
+PLUGIN_VERSION = "1.8.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
@@ -651,20 +652,71 @@ class GuessCardPlugin(Star):  # type: ignore
         构建所有有效的角色名称和别名的集合，用于快速验证用户输入
         """
         self.valid_answers = set()
+        # 构建模糊匹配用的候选列表，包含所有可能的答案形式
+        self.fuzzy_candidates = []
         if not self.characters_map:
             return
         
         for character in self.characters_map.values():
+            char_id = character.get("characterId")
             # 添加英文缩写
             if character.get("name"):
-                self.valid_answers.add(character["name"].lower())
+                name = character["name"].lower()
+                self.valid_answers.add(name)
+                self.fuzzy_candidates.append((name, char_id))
             # 添加中文名称
             if character.get("fullNameChinese"):
-                self.valid_answers.add(character["fullNameChinese"].lower())
+                cn_name = character["fullNameChinese"].lower()
+                self.valid_answers.add(cn_name)
+                self.fuzzy_candidates.append((cn_name, char_id))
             # 添加所有别名
             aliases = character.get("aliases", [])
             for alias in aliases:
-                self.valid_answers.add(alias.lower())
+                alias_lower = alias.lower()
+                self.valid_answers.add(alias_lower)
+                self.fuzzy_candidates.append((alias_lower, char_id))
+
+    def _fuzzy_match_character(self, answer: str) -> Optional[int]:
+        """
+        使用模糊匹配查找最相似的角色
+        
+        Args:
+            answer: 用户输入的答案
+            
+        Returns:
+            匹配到的角色ID，如果没有匹配则返回None
+        """
+        if not self.config.get("enable_fuzzy_search", True):
+            return None
+            
+        threshold = self.config.get("fuzzy_match_threshold", 0.6)
+        answer = answer.lower().strip()
+        
+        if not answer or not self.fuzzy_candidates:
+            return None
+        
+        best_match = None
+        best_ratio = 0.0
+        
+        # 使用difflib.SequenceMatcher进行模糊匹配
+        for candidate, char_id in self.fuzzy_candidates:
+            # 计算相似度
+            ratio = difflib.SequenceMatcher(None, answer, candidate).ratio()
+            
+            # 如果输入是候选的子串，给予较高的相似度
+            if answer in candidate or candidate in answer:
+                ratio = max(ratio, 0.85)
+            
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_match = char_id
+        
+        # 如果最佳匹配的相似度超过阈值，返回该角色ID
+        if best_ratio >= threshold:
+            logger.info(f"[猜卡面] 模糊匹配成功: '{answer}' -> 角色ID {best_match}, 相似度: {best_ratio:.2f}")
+            return best_match
+        
+        return None
 
     def _normalize_group_whitelist(self):
         """统一白名单类型为字符串集合"""
@@ -1064,8 +1116,17 @@ class GuessCardPlugin(Star):  # type: ignore
                 answer_name = re.sub(r"^[!！]", "", answer_text).lower()
 
                 if answer_name:
-                    # 验证输入是否为有效的角色名称或别名
-                    if answer_name not in self.valid_answers:
+                    # 验证输入是否为有效的角色名称或别名（精确匹配）
+                    is_valid_input = answer_name in self.valid_answers
+                    
+                    # 如果精确匹配失败，尝试模糊匹配
+                    fuzzy_matched_char_id = None
+                    if not is_valid_input and self.config.get("enable_fuzzy_search", True):
+                        fuzzy_matched_char_id = self._fuzzy_match_character(answer_name)
+                        if fuzzy_matched_char_id:
+                            is_valid_input = True
+                    
+                    if not is_valid_input:
                         # 输入不是有效的角色名称或别名，忽略该输入
                         return
                         
@@ -1073,6 +1134,7 @@ class GuessCardPlugin(Star):  # type: ignore
                     user_id = answer_event.get_sender_id()
                     
                     try:
+                        correct_char_id = game_session.game_data["character"]["characterId"]
                         correct_name_abbr = game_session.game_data["character"]["name"].lower()
                         correct_name_chinese = game_session.game_data["character"]["fullNameChinese"].lower()
                         aliases = game_session.game_data["character"].get("aliases", [])
@@ -1086,6 +1148,10 @@ class GuessCardPlugin(Star):  # type: ignore
                                 if answer_name == alias.lower():
                                     is_correct = True
                                     break
+                        
+                        # 如果精确匹配失败，检查模糊匹配结果
+                        if not is_correct and fuzzy_matched_char_id is not None:
+                            is_correct = fuzzy_matched_char_id == correct_char_id
 
                         if is_correct:
                             winner_name = answer_event.get_sender_name()
