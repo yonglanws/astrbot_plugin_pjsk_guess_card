@@ -6,7 +6,6 @@ import time
 import os
 import sqlite3
 import io
-import difflib
 from contextlib import closing
 from pathlib import Path
 from typing import Optional, Union
@@ -63,7 +62,7 @@ except ImportError:
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "1.8.0" 
+PLUGIN_VERSION = "1.7.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
@@ -652,128 +651,20 @@ class GuessCardPlugin(Star):  # type: ignore
         构建所有有效的角色名称和别名的集合，用于快速验证用户输入
         """
         self.valid_answers = set()
-        # 构建模糊匹配用的候选列表，包含所有可能的答案形式
-        self.fuzzy_candidates = []
         if not self.characters_map:
-            logger.error("[猜卡面] 角色数据未加载，无法构建答案集合")
             return
         
-        alias_count = 0
         for character in self.characters_map.values():
-            char_id = character.get("characterId")
             # 添加英文缩写
             if character.get("name"):
-                name = character["name"].lower()
-                self.valid_answers.add(name)
-                self.fuzzy_candidates.append((name, char_id))
+                self.valid_answers.add(character["name"].lower())
             # 添加中文名称
             if character.get("fullNameChinese"):
-                cn_name = character["fullNameChinese"].lower()
-                self.valid_answers.add(cn_name)
-                self.fuzzy_candidates.append((cn_name, char_id))
+                self.valid_answers.add(character["fullNameChinese"].lower())
             # 添加所有别名
             aliases = character.get("aliases", [])
             for alias in aliases:
-                alias_lower = alias.lower().strip()
-                self.valid_answers.add(alias_lower)
-                self.fuzzy_candidates.append((alias_lower, char_id))
-                alias_count += 1
-        
-        logger.info(f"[猜卡面] 答案集合构建完成: {len(self.valid_answers)} 个有效答案, {alias_count} 个别名, {len(self.fuzzy_candidates)} 个模糊匹配候选")
-
-    def _fuzzy_match_character(self, answer: str) -> Optional[int]:
-        """
-        使用模糊匹配查找最相似的角色
-        
-        Args:
-            answer: 用户输入的答案
-            
-        Returns:
-            匹配到的角色ID，如果没有匹配则返回None
-        """
-        if not self.config.get("enable_fuzzy_search", True):
-            return None
-            
-        threshold = self.config.get("fuzzy_match_threshold", 0.6)
-        answer = answer.lower().strip()
-        
-        if not answer or not self.fuzzy_candidates:
-            return None
-        
-        best_match = None
-        best_ratio = 0.0
-        
-        # 使用difflib.SequenceMatcher进行模糊匹配
-        for candidate, char_id in self.fuzzy_candidates:
-            candidate_lower = candidate.lower().strip()
-            
-            # 精确匹配优先
-            if answer == candidate_lower:
-                return char_id
-            
-            # 计算相似度
-            ratio = difflib.SequenceMatcher(None, answer, candidate_lower).ratio()
-            
-            # 如果输入是候选的子串，给予较高的相似度
-            if answer in candidate_lower:
-                # 输入是候选的子串（如"星乃"是"星乃一歌"的子串）
-                # 根据匹配长度给予不同权重
-                match_ratio = len(answer) / len(candidate_lower)
-                if match_ratio >= 0.5:  # 匹配超过一半字符
-                    ratio = max(ratio, 0.95)
-                else:
-                    ratio = max(ratio, 0.85)
-            elif candidate_lower in answer:
-                # 候选是输入的子串
-                ratio = max(ratio, 0.8)
-            
-            # 对于短输入（1-3个字符），如果是某个候选的精确匹配或高度相似，给予更高权重
-            if len(answer) <= 3:
-                if answer == candidate_lower:
-                    ratio = 1.0
-                elif ratio >= 0.7:
-                    ratio = max(ratio, 0.9)
-            
-            # 对于中文名称，检查是否包含相同的汉字
-            # 计算共同字符比例
-            answer_chars = set(answer)
-            candidate_chars = set(candidate_lower)
-            if answer_chars and candidate_chars:
-                common_chars = answer_chars & candidate_chars
-                char_overlap_ratio = len(common_chars) / max(len(answer_chars), len(candidate_chars))
-                if char_overlap_ratio >= 0.5:  # 有一半以上相同字符
-                    ratio = max(ratio, 0.7 + char_overlap_ratio * 0.2)
-            
-            if ratio > best_ratio:
-                best_ratio = ratio
-                best_match = char_id
-        
-        # 如果最佳匹配的相似度超过阈值，返回该角色ID
-        if best_ratio >= threshold:
-            logger.info(f"[猜卡面] 模糊匹配成功: '{answer}' -> 角色ID {best_match}, 相似度: {best_ratio:.2f}")
-            return best_match
-        
-        logger.debug(f"[猜卡面] 模糊匹配失败: '{answer}', 最高相似度: {best_ratio:.2f}, 阈值: {threshold}")
-        return None
-    
-    def _check_fuzzy_match(self, answer: str, correct_char_id: int) -> bool:
-        """
-        检查用户输入是否通过模糊匹配对应到正确答案
-        
-        Args:
-            answer: 用户输入的答案
-            correct_char_id: 正确答案的角色ID
-            
-        Returns:
-            是否匹配成功
-        """
-        if not self.config.get("enable_fuzzy_search", True):
-            return False
-        
-        matched_id = self._fuzzy_match_character(answer)
-        if matched_id is not None:
-            return matched_id == correct_char_id
-        return False
+                self.valid_answers.add(alias.lower())
 
     def _normalize_group_whitelist(self):
         """统一白名单类型为字符串集合"""
@@ -1170,96 +1061,80 @@ class GuessCardPlugin(Star):  # type: ignore
                 answer_text = answer_event.message_str.strip()
                 
                 # 移除对!前缀的强制要求
-                answer_name = re.sub(r"^[!！]", "", answer_text).lower().strip()
+                answer_name = re.sub(r"^[!！]", "", answer_text).lower()
 
-                if not answer_name:
-                    return
+                if answer_name:
+                    # 验证输入是否为有效的角色名称或别名
+                    if answer_name not in self.valid_answers:
+                        # 输入不是有效的角色名称或别名，忽略该输入
+                        return
+                        
+                    game_session.guess_attempts_count += 1
+                    user_id = answer_event.get_sender_id()
                     
-                # 获取正确答案信息
-                correct_char_id = game_session.game_data["character"]["characterId"]
-                correct_name_abbr = game_session.game_data["character"]["name"].lower()
-                correct_name_chinese = game_session.game_data["character"]["fullNameChinese"].lower()
-                aliases = game_session.game_data["character"].get("aliases", [])
-                
-                # 1. 首先检查精确匹配（缩写、中文名）
-                is_correct = answer_name == correct_name_abbr or answer_name == correct_name_chinese
-                match_type = "精确匹配(名称)" if is_correct else None
-                
-                # 2. 检查别名精确匹配
-                if not is_correct:
-                    for alias in aliases:
-                        if answer_name == alias.lower().strip():
-                            is_correct = True
-                            match_type = "精确匹配(别名)"
-                            break
-                
-                # 3. 如果精确匹配失败且启用了模糊搜索，尝试模糊匹配
-                if not is_correct and self.config.get("enable_fuzzy_search", True):
-                    matched_char_id = self._fuzzy_match_character(answer_name)
-                    if matched_char_id is not None:
-                        is_correct = matched_char_id == correct_char_id
+                    try:
+                        correct_name_abbr = game_session.game_data["character"]["name"].lower()
+                        correct_name_chinese = game_session.game_data["character"]["fullNameChinese"].lower()
+                        aliases = game_session.game_data["character"].get("aliases", [])
+                        
+                        # 检查是否匹配任何一个可能的答案（缩写、中文名称、别名）
+                        is_correct = answer_name == correct_name_abbr or answer_name == correct_name_chinese
+                        
+                        # 检查是否匹配任何一个别名
+                        if not is_correct:
+                            for alias in aliases:
+                                if answer_name == alias.lower():
+                                    is_correct = True
+                                    break
+
                         if is_correct:
-                            match_type = "模糊匹配"
-                
-                # 4. 验证输入是否有效（用于过滤无关消息）
-                is_valid_input = is_correct or answer_name in self.valid_answers
-                
-                if not is_valid_input:
-                    # 输入不是有效的角色名称或别名，忽略该输入
-                    return
-                        
-                game_session.guess_attempts_count += 1
-                user_id = answer_event.get_sender_id()
-                
-                if is_correct:
-                    logger.info(f"[猜卡面] 回答正确: '{answer_name}' -> 角色ID {correct_char_id}, 匹配方式: {match_type}")
-                    
-                    winner_name = answer_event.get_sender_name()
-                    score = game_session.game_data["score"]
-                    current_time = time.time()
-                    
-                    if not game_session.winner_info:
-                        first_correct_time = current_time
-                        
-                        game_session.winner_info = {"name": winner_name, "id": user_id, "score": score}
-                        
-                        winners_list.append({
-                            'user_id': user_id,
-                            'user_name': winner_name,
-                            'answer_time': current_time,
-                            'is_first': True
-                        })
-                        
-                        if reward_valid_time > 0:
-                            logger.info(f"[猜卡面] 第一个答对者: {winner_name}，启动{reward_valid_time}秒奖励有效时间")
-                            async def stop_after_delay():
-                                await asyncio.sleep(reward_valid_time)
-                                controller.stop()
-                            asyncio.create_task(stop_after_delay())
-                        else:
-                            controller.stop()
-                            return
-                    else:
-                        time_since_first_correct = current_time - first_correct_time
-                        if time_since_first_correct <= reward_valid_time and reward_valid_time > 0:
-                            if not any(w['user_id'] == user_id for w in winners_list):
+                            winner_name = answer_event.get_sender_name()
+                            score = game_session.game_data["score"]
+                            current_time = time.time()
+                            
+                            if not game_session.winner_info:
+                                first_correct_time = current_time
+                                
+                                game_session.winner_info = {"name": winner_name, "id": user_id, "score": score}
+                                
                                 winners_list.append({
                                     'user_id': user_id,
                                     'user_name': winner_name,
                                     'answer_time': current_time,
-                                    'is_first': False
+                                    'is_first': True
                                 })
-                                logger.info(f"[猜卡面] 奖励有效时间内额外答对: {winner_name} (+{time_since_first_correct:.2f}s)")
-                else:
-                    # 回答错误，记录统计
-                    if user_id not in game_session.user_stats_recorded:
-                        self._update_stats(user_id, answer_event.get_sender_name(), 0, correct=False)
-                        game_session.user_stats_recorded.add(user_id)
+                                
+                                if reward_valid_time > 0:
+                                    logger.info(f"[猜卡面] 第一个答对者: {winner_name}，启动{reward_valid_time}秒奖励有效时间")
+                                    async def stop_after_delay():
+                                        await asyncio.sleep(reward_valid_time)
+                                        controller.stop()
+                                    asyncio.create_task(stop_after_delay())
+                                else:
+                                    controller.stop()
+                                    return
+                            else:
+                                time_since_first_correct = current_time - first_correct_time
+                                if time_since_first_correct <= reward_valid_time and reward_valid_time > 0:
+                                    if not any(w['user_id'] == user_id for w in winners_list):
+                                        winners_list.append({
+                                            'user_id': user_id,
+                                            'user_name': winner_name,
+                                            'answer_time': current_time,
+                                            'is_first': False
+                                        })
+                                        logger.info(f"[猜卡面] 奖励有效时间内额外答对: {winner_name} (+{time_since_first_correct:.2f}s)")
+                        else:
+                            if user_id not in game_session.user_stats_recorded:
+                                self._update_stats(user_id, answer_event.get_sender_name(), 0, correct=False)
+                                game_session.user_stats_recorded.add(user_id)
+                    except (ValueError, IndexError):
+                        pass
 
-                # 如果达到猜测次数上限，则结束游戏（-1表示无限制）
-                if max_guess_attempts != -1 and game_session.guess_attempts_count >= max_guess_attempts:
-                    game_session.game_ended_by_attempts = True
-                    controller.stop()
+                    # 如果达到猜测次数上限，则结束游戏（-1表示无限制）
+                    if max_guess_attempts != -1 and game_session.guess_attempts_count >= max_guess_attempts:
+                        game_session.game_ended_by_attempts = True
+                        controller.stop()
 
             try:
                 await guess_waiter(event)
