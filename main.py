@@ -616,9 +616,6 @@ class GuessCardPlugin(Star):  # type: ignore
         # 统一黑名单类型为字符串集合
         self._normalize_blacklist()
         
-        # 校验远程资源URL配置
-        self._validate_remote_resource_url()
-
         self._cleanup_output_dir()
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup_task())
         self._track_task(self._cleanup_task)
@@ -688,21 +685,7 @@ class GuessCardPlugin(Star):  # type: ignore
             return "[此用户已被BOT拉黑]"
         return original_name if original_name else "未知用户"
 
-    def _validate_remote_resource_url(self):
-        """校验远程资源URL配置合法性"""
-        if self.config.get("use_local_resources", True):
-            return
-        
-        resource_url_base = self.config.get("remote_resource_url_base", "")
-        if not resource_url_base:
-            return
-        
-        try:
-            parsed_url = urlparse(resource_url_base)
-            if not parsed_url.scheme or not parsed_url.hostname:
-                logger.error(f"远程资源URL配置错误: {resource_url_base}。请确保URL格式正确，包含协议(如http/https)和主机名。")
-        except Exception as e:
-            logger.error(f"远程资源URL配置解析失败: {resource_url_base}, 错误: {e}")
+
 
     async def _get_session(self) -> 'aiohttp.ClientSession':
         """延迟初始化并获取 aiohttp session"""
@@ -727,18 +710,10 @@ class GuessCardPlugin(Star):  # type: ignore
             except Exception as e:
                 logger.error(f"猜卡插件周期性清理任务失败: {e}", exc_info=True)
 
-    def _get_resource_path_or_url(self, relative_path: str) -> Optional[Union[Path, str]]:
-        """根据配置返回资源的本地Path对象或远程URL字符串。"""
-        use_local = self.config.get("use_local_resources", True)
-        if use_local:
-            path = self.resources_dir / relative_path
-            return path if path.exists() else None
-        else:
-            base_url = self.config.get("remote_resource_url_base", "").strip('/')
-            if not base_url:
-                logger.error("配置为使用远程资源，但 remote_resource_url_base 未设置。")
-                return None
-            return f"{base_url}/{'/'.join(Path(relative_path).parts)}"
+    def _get_resource_url(self, relative_path: str) -> str:
+        """返回远程资源的URL字符串"""
+        base_url = "https://storage.exmeaning.com/sekai-jp-assets/character"
+        return f"{base_url}/{'/'.join(Path(relative_path).parts)}"
 
     async def _open_image(self, image_source: Union[Path, str]) -> Optional[Image.Image]:
         """打开一个资源图片，无论是本地路径还是远程URL。"""
@@ -904,14 +879,7 @@ class GuessCardPlugin(Star):  # type: ignore
         card_type = random.choice(["normal", "after_training"])
         
         # 使用原始卡面图片作为问题图片
-        answer_image_filename = f"card_{card_type}.png"
-
-        # 当使用本地资源时，检查图片是否存在
-        if self.config.get("use_local_resources", True):
-            answer_image_path = self.resources_dir / "member" / card["assetbundleName"] / answer_image_filename
-            if not answer_image_path.exists():
-                logger.error(f"卡面图片未找到: {answer_image_path}")
-                return None
+        answer_image_filename = f"card_{card_type}.webp"
 
         character = self.characters_map.get(card["characterId"])
         if not character:
@@ -933,7 +901,7 @@ class GuessCardPlugin(Star):  # type: ignore
         return {
             "card": card,
             "card_state": card_type,
-            "card_image_source": self._get_resource_path_or_url(f'member/{card["assetbundleName"]}/{answer_image_filename}'),
+            "card_image_source": self._get_resource_url(f'member/{card["assetbundleName"]}/{answer_image_filename}'),
             "character": character,
             "score": base_score,
             "show_rarity_hint": show_rarity_hint,
@@ -1484,7 +1452,13 @@ class GuessCardPlugin(Star):  # type: ignore
                         display_name += "..."
                     
                     pilmoji.text((col_positions[1], current_y), display_name, font=body_font, fill=font_color)
-                    pilmoji.text((col_positions[1], current_y + 32), f"{user_name} ID: {user_id}", font=id_font, fill=header_color)
+                    id_text = f"{user_name} ID: {user_id}"
+                    max_id_width = col_positions[2] - col_positions[1] - 20
+                    if id_font.getbbox(id_text)[2] > max_id_width:
+                        while id_font.getbbox(id_text + "...")[2] > max_id_width and len(id_text) > 0:
+                            id_text = id_text[:-1]
+                        id_text += "..."
+                    pilmoji.text((col_positions[1], current_y + 32), id_text, font=id_font, fill=header_color)
                     pilmoji.text((col_positions[2], current_y), score, font=body_font, fill=score_color)
                     pilmoji.text((col_positions[3], current_y), accuracy, font=body_font, fill=accuracy_color)
                     pilmoji.text((col_positions[4], current_y), attempts, font=body_font, fill=font_color)

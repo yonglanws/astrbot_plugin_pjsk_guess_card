@@ -55,18 +55,6 @@
     "default": 10,
     "hint": "设置每轮游戏中，所有玩家总共可以尝试回答的次数上限。设置为-1表示无限制。"
   },
-  "remote_resource_url_base": {
-    "description": "远程资源服务器的根 URL",
-    "type": "string",
-    "default": "http://47.110.56.9",
-    "hint": "当'使用本地资源'为 false 时, 插件将从此 URL 下载资源。URL末尾不需要加'/'。例如: https://example.com/sekai_card_assets"
-  },
-  "use_local_resources": {
-    "description": "是否使用本地资源",
-    "type": "bool",
-    "default": false,
-    "hint": "如果为 true, 插件将从本地 resources 文件夹加载图片。如果为 false, 将从下方配置的 URL 加载。"
-  },
   "ranking_display_count": {
     "description": "排行榜显示的人数",
     "type": "int",
