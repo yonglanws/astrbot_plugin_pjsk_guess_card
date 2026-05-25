@@ -62,7 +62,7 @@ except ImportError:
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "1.7.0" 
+PLUGIN_VERSION = "1.8.0" 
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 
 
@@ -161,94 +161,51 @@ class GameSession:
 class ImageEffectProcessor:
     """图片效果处理器类，实现多种图片处理效果算法"""
     
-    # 默认效果配置
-    DEFAULT_EFFECTS = {
-        "light_blur": {
-            "name": "轻度模糊",
-            "description": "轻微的高斯模糊效果",
-            "difficulty": 2,
-            "blur_radius": 15,
-            "enabled": True
-        },
-        "heavy_blur": {
-            "name": "重度模糊",
-            "description": "高强度高斯模糊效果",
-            "difficulty": 3,
-            "blur_radius": 40,
-            "enabled": True
-        },
-        "shuffle_blocks_easy": {
-            "name": "分块打乱(简易)",
-            "description": "将图片分割为较大方块并随机重新排列",
-            "difficulty": 1,
-            "block_size": 65,
-            "enabled": True
-        },
-        "shuffle_blocks_hard": {
-            "name": "分块打乱(困难)",
-            "description": "将图片分割为较小方块并随机重新排列",
-            "difficulty": 4,
-            "block_size": 20,
-            "enabled": True
-        },
-        "glitch": {
-            "name": "损坏效果",
-            "description": "模拟图片撕裂、噪点或数据损坏的视觉表现",
-            "difficulty": 3,
-            "glitch_intensity": 1,
-            "enabled": True
-        },
-        "horizontal_slice": {
-            "name": "横向切割",
-            "description": "将图片按横向切割为多个长条并随机打乱重排",
-            "difficulty": 1,
-            "slice_count": 8,
-            "enabled": True
-        },
-        "vertical_slice": {
-            "name": "纵向切割",
-            "description": "将图片按纵向切割为多个长条并随机打乱重排",
-            "difficulty": 1,
-            "slice_count": 8,
-            "enabled": True
-        }
+    EFFECT_NAMES = {
+        "light_blur": "轻度模糊",
+        "heavy_blur": "重度模糊",
+        "shuffle_blocks_easy": "分块打乱(简易)",
+        "shuffle_blocks_hard": "分块打乱(困难)",
+        "horizontal_slice": "横向切割",
+        "vertical_slice": "纵向切割",
+        "crop_area": "截取区域",
+        "two_strips": "两长条截取",
+        "three_strips": "三长条截取",
     }
+    
+    EFFECT_PARAMS = {
+        "light_blur": ["blur_radius"],
+        "heavy_blur": ["blur_radius"],
+        "shuffle_blocks_easy": ["block_size"],
+        "shuffle_blocks_hard": ["block_size"],
+        "horizontal_slice": ["slice_count"],
+        "vertical_slice": ["slice_count"],
+        "crop_area": ["crop_ratio"],
+        "two_strips": [],
+        "three_strips": [],
+    }
+    
+    EFFECT_NAME_TO_KEY = {v: k for k, v in EFFECT_NAMES.items()}
     
     COMBINATIONS = {}
     
     def __init__(self, config=None):
-        """初始化效果处理器，可传入自定义配置"""
-        self.EFFECTS = self.DEFAULT_EFFECTS.copy()
-        if config:
-            self.update_from_nested_config(config)
-    
-    def update_from_nested_config(self, config):
-        """从嵌套配置中更新效果设置"""
-        effects_config = config.get("effects", {})
+        """初始化效果处理器，从配置构建效果设置"""
+        self.EFFECTS = {}
+        effects_config = config.get("effects", {}) if config else {}
         logger.info(f"加载效果配置: {effects_config}")
         
-        for effect_name, effect_config in effects_config.items():
-            if effect_name in self.EFFECTS:
-                if "enabled" in effect_config:
-                    self.EFFECTS[effect_name]["enabled"] = effect_config["enabled"]
-                    logger.info(f"设置 {effect_name} 启用状态: {effect_config['enabled']}")
-                if "difficulty" in effect_config:
-                    self.EFFECTS[effect_name]["difficulty"] = effect_config["difficulty"]
-                    logger.info(f"设置 {effect_name} 分数: {effect_config['difficulty']}")
-                if "blur_radius" in effect_config:
-                    self.EFFECTS[effect_name]["blur_radius"] = effect_config["blur_radius"]
-                    logger.info(f"设置 {effect_name} 模糊半径: {effect_config['blur_radius']}")
-                if "block_size" in effect_config:
-                    self.EFFECTS[effect_name]["block_size"] = effect_config["block_size"]
-                    logger.info(f"设置 {effect_name} 区块大小: {effect_config['block_size']}")
-                if "glitch_intensity" in effect_config:
-                    self.EFFECTS[effect_name]["glitch_intensity"] = effect_config["glitch_intensity"]
-                    logger.info(f"设置 {effect_name} 损坏强度: {effect_config['glitch_intensity']}")
-                if "slice_count" in effect_config:
-                    self.EFFECTS[effect_name]["slice_count"] = effect_config["slice_count"]
-                    logger.info(f"设置 {effect_name} 切割数量: {effect_config['slice_count']}")
+        for effect_name in self.EFFECT_NAMES:
+            effect_cfg = effects_config.get(effect_name, {})
+            self.EFFECTS[effect_name] = {
+                "name": self.EFFECT_NAMES[effect_name],
+                "enabled": effect_cfg.get("enabled", True),
+                "difficulty": effect_cfg.get("difficulty", 1),
+            }
+            for param in self.EFFECT_PARAMS.get(effect_name, []):
+                if param in effect_cfg:
+                    self.EFFECTS[effect_name][param] = effect_cfg[param]
         
-        # 输出最终的效果配置
         logger.info(f"最终效果配置: {self.EFFECTS}")
     
     def get_enabled_effects(self):
@@ -332,120 +289,6 @@ class ImageEffectProcessor:
             return img
     
     @classmethod
-    def apply_glitch(cls, img, intensity=0.5):
-        """应用损坏效果"""
-        w, h = img.size
-        pixels = img.load()
-        result = img.copy()
-        result_pixels = result.load()
-        
-        # 增加损坏强度
-        num_glitches = int(h * intensity)
-        
-        # 1. 增加撕裂效果
-        for _ in range(num_glitches):
-            rand_val = random.random()
-            if rand_val < 0.3:
-                # 更大范围的水平撕裂
-                y = random.randint(0, h - 1)
-                shift = random.randint(-30, 30)
-                if 0 <= y + shift < h:
-                    # 撕裂整行
-                    for x in range(w):
-                        result_pixels[x, y] = pixels[x, (y + shift) % h]
-            elif rand_val < 0.4:
-                # 水平扫描线撕裂
-                y = random.randint(0, h - 1)
-                # 撕裂多行
-                height = random.randint(1, 10)
-                shift = random.randint(-25, 25)
-                for dy in range(height):
-                    if 0 <= y + dy < h:
-                        for x in range(w):
-                            result_pixels[x, y + dy] = pixels[x, (y + dy + shift) % h]
-            elif rand_val < 0.5:
-                # 增强垂直撕裂
-                x = random.randint(0, w - 1)
-                # 增加垂直撕裂的范围
-                shift = random.randint(-35, 35)
-                if 0 <= x + shift < w:
-                    # 撕裂整列
-                    for y_col in range(h):
-                        result_pixels[x, y_col] = pixels[(x + shift) % w, y_col]
-            elif rand_val < 0.85:
-                # 垂直扫描线撕裂
-                x = random.randint(0, w - 1)
-                # 撕裂多列
-                width = random.randint(1, 10)
-                shift = random.randint(-30, 30)
-                for dx in range(width):
-                    if 0 <= x + dx < w:
-                        for y_col in range(h):
-                            result_pixels[x + dx, y_col] = pixels[(x + dx + shift) % w, y_col]
-            else:
-                # 2. 增加大量噪点
-                # 随机块噪点，确保小尺寸图片也能正常处理
-                max_y_offset = max(0, h - 30)
-                max_x_offset = max(0, w - 30)
-                y = random.randint(0, max_y_offset)
-                x = random.randint(0, max_x_offset)
-                max_block_size = min(30, h - y, w - x)
-                if max_block_size >= 10:
-                    block_size = random.randint(10, max_block_size)
-                    for dy in range(block_size):
-                        for dx in range(block_size):
-                            if img.mode == 'RGB':
-                                result_pixels[x + dx, y + dy] = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-                            elif img.mode == 'RGBA':
-                                result_pixels[x + dx, y + dy] = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-                            else:
-                                result_pixels[x + dx, y + dy] = random.randint(0, 255)
-        
-        # 3. 增加额外的噪点层
-        # 随机像素噪点
-        num_noise_pixels = int(w * h * intensity * 0.1)
-        for _ in range(num_noise_pixels):
-            x = random.randint(0, w - 1)
-            y = random.randint(0, h - 1)
-            if img.mode == 'RGB':
-                result_pixels[x, y] = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-            elif img.mode == 'RGBA':
-                result_pixels[x, y] = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-            else:
-                result_pixels[x, y] = random.randint(0, 255)
-        
-        # 4. 减弱色彩偏移效果，降低饱和度
-        for _ in range(int(h * intensity * 0.3)):  # 减少色彩偏移的数量
-            y = random.randint(0, h - 1)
-            offset = random.randint(-3, 3)
-            for x in range(w):
-                if 0 <= x + offset < w:
-                    if img.mode == 'RGB':
-                        r, g, b = pixels[x, y]
-                        # 减弱色彩偏移，降低饱和度
-                        result_pixels[x, y] = ((r + random.randint(-15, 15)) % 256, 
-                                            (g + random.randint(-15, 15)) % 256, 
-                                            (b + random.randint(-15, 15)) % 256)
-                    elif img.mode == 'RGBA':
-                        r, g, b, a = pixels[x, y]
-                        result_pixels[x, y] = ((r + random.randint(-15, 15)) % 256, 
-                                            (g + random.randint(-15, 15)) % 256, 
-                                            (b + random.randint(-15, 15)) % 256, a)
-        
-        # 4. 整体降低饱和度
-        if img.mode == 'RGB' or img.mode == 'RGBA':
-            # 转换为灰度图
-            grayscale = result.convert('L')
-            # 转换回彩色模式，保持灰度效果
-            if img.mode == 'RGB':
-                result = Image.merge('RGB', (grayscale, grayscale, grayscale))
-            elif img.mode == 'RGBA':
-                alpha = result.split()[-1]
-                result = Image.merge('RGBA', (grayscale, grayscale, grayscale, alpha))
-        
-        return result
-    
-    @classmethod
     def apply_horizontal_slice(cls, img, slice_count=8):
         """应用横向切割效果：将图片横向切割为多个等宽长条并随机打乱重排"""
         try:
@@ -507,6 +350,114 @@ class ImageEffectProcessor:
             logger.error(f"纵向切割处理失败: {e}", exc_info=True)
             return img
     
+    @classmethod
+    def apply_crop_area(cls, img, crop_ratio=0.5):
+        """随机截取图片中的一部分区域"""
+        try:
+            w, h = img.size
+            crop_w = max(int(w * crop_ratio), 50)
+            crop_h = max(int(h * crop_ratio), 50)
+            
+            max_x = w - crop_w
+            max_y = h - crop_h
+            x = random.randint(0, max_x) if max_x > 0 else 0
+            y = random.randint(0, max_y) if max_y > 0 else 0
+            
+            return img.crop((x, y, x + crop_w, y + crop_h))
+        except Exception as e:
+            logger.error(f"截取区域处理失败: {e}", exc_info=True)
+            return img
+    
+    @classmethod
+    def apply_two_strips(cls, img):
+        """随机截取两个高度一致的等宽长条并合成矩形，中间有白色分界线"""
+        try:
+            w, h = img.size
+            strip_h = random.randint(max(int(h * 0.1), 25), max(int(h * 0.35), 35))
+            strip_h = min(strip_h, h // 2 - 1)
+            strip_w = random.randint(max(int(w * 0.5), 60), max(int(w * 0.85), 80))
+            
+            possible_ys = list(range(0, h - strip_h + 1))
+            random.shuffle(possible_ys)
+            
+            found = []
+            for y in possible_ys:
+                if not any(y < ey + strip_h and y + strip_h > ey for ey in found):
+                    found.append(y)
+                if len(found) == 2:
+                    break
+            
+            if len(found) < 2:
+                return img
+            
+            found.sort()
+            
+            divider_h = 3
+            total_h = strip_h * 2 + divider_h
+            result = Image.new(img.mode, (strip_w, total_h))
+            
+            y_offset = 0
+            for i, orig_y in enumerate(found):
+                max_x = w - strip_w
+                x = random.randint(0, max_x) if max_x > 0 else 0
+                strip = img.crop((x, orig_y, x + strip_w, orig_y + strip_h))
+                result.paste(strip, (0, y_offset))
+                y_offset += strip_h
+                if i < len(found) - 1:
+                    draw = ImageDraw.Draw(result)
+                    draw.rectangle([(0, y_offset), (strip_w - 1, y_offset + divider_h - 1)], fill=(255, 255, 255))
+                    y_offset += divider_h
+            
+            return result
+        except Exception as e:
+            logger.error(f"两长条截取处理失败: {e}", exc_info=True)
+            return img
+    
+    @classmethod
+    def apply_three_strips(cls, img):
+        """随机截取三个高度一致的等宽长条并合成矩形，中间有白色分界线"""
+        try:
+            w, h = img.size
+            strip_h = random.randint(max(int(h * 0.08), 20), max(int(h * 0.2), 28))
+            strip_h = min(strip_h, h // 3 - 1)
+            strip_w = random.randint(max(int(w * 0.5), 60), max(int(w * 0.85), 80))
+            
+            possible_ys = list(range(0, h - strip_h + 1))
+            random.shuffle(possible_ys)
+            
+            found = []
+            for y in possible_ys:
+                if not any(y < ey + strip_h and y + strip_h > ey for ey in found):
+                    found.append(y)
+                if len(found) == 3:
+                    break
+            
+            if len(found) < 3:
+                return img
+            
+            found.sort()
+            
+            divider_h = 3
+            total_h = strip_h * 3 + divider_h * 2
+            result = Image.new(img.mode, (strip_w, total_h))
+            
+            y_offset = 0
+            for i, orig_y in enumerate(found):
+                max_x = w - strip_w
+                x = random.randint(0, max_x) if max_x > 0 else 0
+                strip = img.crop((x, orig_y, x + strip_w, orig_y + strip_h))
+                result.paste(strip, (0, y_offset))
+                y_offset += strip_h
+                if i < len(found) - 1:
+                    draw = ImageDraw.Draw(result)
+                    draw.rectangle([(0, y_offset), (strip_w - 1, y_offset + divider_h - 1)], fill=(255, 255, 255))
+                    y_offset += divider_h
+            
+            return result
+        except Exception as e:
+            logger.error(f"三长条截取处理失败: {e}", exc_info=True)
+            return img
+    
     def apply_effect(self, img, effect_name, **kwargs):
         """应用指定的图片效果"""
         if effect_name == "none":
@@ -523,15 +474,19 @@ class ImageEffectProcessor:
         elif effect_name == "shuffle_blocks_hard":
             block_size = kwargs.get("block_size", self.EFFECTS["shuffle_blocks_hard"]["block_size"])
             return self.apply_shuffle_blocks(img, block_size)
-        elif effect_name == "glitch":
-            intensity = kwargs.get("glitch_intensity", self.EFFECTS["glitch"]["glitch_intensity"])
-            return self.apply_glitch(img, intensity)
         elif effect_name == "horizontal_slice":
             slice_count = kwargs.get("slice_count", self.EFFECTS["horizontal_slice"]["slice_count"])
             return self.apply_horizontal_slice(img, slice_count)
         elif effect_name == "vertical_slice":
             slice_count = kwargs.get("slice_count", self.EFFECTS["vertical_slice"]["slice_count"])
             return self.apply_vertical_slice(img, slice_count)
+        elif effect_name == "crop_area":
+            crop_ratio = kwargs.get("crop_ratio", self.EFFECTS["crop_area"]["crop_ratio"])
+            return self.apply_crop_area(img, crop_ratio)
+        elif effect_name == "two_strips":
+            return self.apply_two_strips(img)
+        elif effect_name == "three_strips":
+            return self.apply_three_strips(img)
         return img
     
     def apply_effects(self, img, effect_names):
@@ -868,7 +823,7 @@ class GuessCardPlugin(Star):  # type: ignore
             return await asyncio.to_thread(self._apply_effects_sync, image_source, effect_names)
 
     # --- 游戏逻辑 ---
-    def start_new_game(self) -> Optional[dict]:
+    def start_new_game(self, force_effect_names: Optional[list] = None) -> Optional[dict]:
         """准备一轮新游戏，加入花前/花后逻辑和图片效果"""
         if not self.guess_cards or not self.characters_map:
             logger.error("无法开始游戏，因为卡牌数据未成功加载。")
@@ -887,7 +842,12 @@ class GuessCardPlugin(Star):  # type: ignore
             return None
 
         # 选择随机效果或效果组合
-        effect_names, effect_name = self.effect_processor.random_effect_combination()
+        if force_effect_names:
+            effect_names = force_effect_names
+            effect_name = " + ".join([self.effect_processor.EFFECT_NAMES.get(name, name) for name in effect_names])
+        else:
+            effect_names, effect_name = self.effect_processor.random_effect_combination()
+            
         difficulty = self.effect_processor.calculate_difficulty(effect_names)
         
         # 根据难度计算基础分数，难度越高分数越高
@@ -1185,6 +1145,277 @@ class GuessCardPlugin(Star):  # type: ignore
                 del self.game_sessions[session_id]
             # 不再删除锁实例，保留锁以维持互斥机制
 
+
+    @filter.command("测试猜卡")
+    async def test_guess_card(self, event: AstrMessageEvent):
+        """测试模式：指定效果开始一轮猜卡游戏"""
+        if not self._is_group_allowed(event):
+            reject_msg = self._get_whitelist_reject_message()
+            if reject_msg:
+                yield event.plain_result(reject_msg)
+            return
+            
+        user_id = event.get_sender_id()
+        if self._is_user_blacklisted(user_id):
+            return
+            
+        # 校验管理员权限
+        super_users = self.config.get("super_users", [])
+        if str(user_id) not in super_users:
+            yield event.plain_result("哎呀，测试猜卡指令只有管理员才能使用哦~ 😊")
+            return
+
+        # 解析效果名称
+        msg_str = event.message_str.strip()
+        effect_arg = re.sub(r"^测试猜卡\s*", "", msg_str).strip()
+        
+        if not effect_arg:
+            available_effects = "、".join(self.effect_processor.EFFECT_NAMES.values())
+            yield event.plain_result(f"请输入要测试的效果名称哦！\n可用效果: {available_effects}\n例如: 测试猜卡 轻度模糊")
+            return
+            
+        # 查找对应的效果 key
+        effect_key = self.effect_processor.EFFECT_NAME_TO_KEY.get(effect_arg)
+        if not effect_key:
+            # 尝试直接匹配 key
+            if effect_arg in self.effect_processor.EFFECT_NAMES:
+                effect_key = effect_arg
+            else:
+                available_effects = "、".join(self.effect_processor.EFFECT_NAMES.values())
+                yield event.plain_result(f"未找到效果 '{effect_arg}' 呢~\n可用效果: {available_effects}")
+                return
+
+        session_id = event.unified_msg_origin
+
+        # --- 锁定会话以防止竞态条件 ---
+        if session_id not in self.session_locks:
+            self.session_locks[session_id] = asyncio.Lock()
+        lock = self.session_locks[session_id]
+
+        async with lock:
+            if session_id in self.active_game_sessions:
+                yield event.plain_result("当前已经有一个游戏在进行中啦~ 等它结束后再来玩吧！")
+                return
+            
+            # 标记游戏会话为活动状态，然后释放锁
+            self.active_game_sessions.add(session_id)
+
+        try:
+            # 强制使用指定效果
+            game_data = self.start_new_game(force_effect_names=[effect_key])
+            if not game_data:
+                yield event.plain_result("......开始游戏失败，可能是缺少资源文件或配置错误，请联系管理员。")
+                return
+
+            # 对卡面图片应用多种效果处理
+            card_image_source = game_data.get("card_image_source")
+            effect_names = game_data.get("effect_names", ["heavy_blur"])
+            processed_image_path = await self._apply_effects(card_image_source, effect_names)
+            
+            if not processed_image_path:
+                yield event.plain_result("哎呀，处理图片时遇到了一点小问题呢~ 游戏暂时中断了，稍后再试试吧！")
+                return
+
+            # 在后台日志中输出答案和效果信息，方便测试
+            logger.info(f"[猜卡插件][测试模式] 新游戏开始. 答案: {game_data['character']['fullNameChinese']}, 效果: {game_data.get('effect_name', '未知')}, 难度: {game_data.get('difficulty', 1)}")
+                
+            hints = []
+            if game_data["show_rarity_hint"]:
+                rarity_map = {
+                    "rarity_3": "⭐⭐⭐", 
+                    "rarity_4": "⭐⭐⭐⭐",
+                }
+                hints.append(f"星级提示: {rarity_map.get(game_data['card']['cardRarityType'], '未知')}")
+            
+            if game_data["show_training_hint"]:
+                state_text = "花后" if game_data["card_state"] == "after_training" else "花前"
+                hints.append(f"状态提示: {state_text}")
+
+            timeout_seconds = self.config.get("answer_timeout", 30)
+            effect_name = game_data.get("effect_name", "无效果")
+            difficulty = game_data.get("difficulty", 1)
+            
+            intro_text = f"【测试模式】请在{timeout_seconds}秒内发送角色名称缩写进行回答哦(无需@机器人)\n"
+            effect_text = f"本轮图片效果: {effect_name}\n猜对得分: {difficulty}分\n"
+            
+            hint_text = "\n".join(hints) + "\n" if hints else ""
+            
+            msg_chain: list = [Comp.Plain(intro_text + effect_text + hint_text)]
+
+            try:
+                # 发送效果处理后的图片
+                if processed_image_path:
+                    msg_chain.append(Comp.Image(file=processed_image_path))
+                yield event.chain_result(msg_chain)
+            except Exception as e:
+                logger.error(f"发送图片失败: {e}. Check if the file path is correct and accessible.")
+                yield event.plain_result("发送问题图片时出错，游戏中断。")
+                return
+            
+            # 记录游戏开始，测试模式不增加该用户的每日游戏次数
+            
+            # 创建并初始化游戏会话状态，确保完全按会话隔离
+            game_session = GameSession()
+            game_session.game_data = game_data
+            self.game_sessions[session_id] = game_session
+            max_guess_attempts = self.config.get("max_guess_attempts", 10)
+            
+            winners_list = []  # 记录所有获奖者（用于奖励有效时间功能）
+            first_correct_time = None  # 记录第一个答对的时间
+            reward_valid_time = self.config.get("reward_valid_time", 0)  # 奖励有效时间配置
+            
+            @session_waiter(timeout=timeout_seconds)  # type: ignore
+            async def guess_waiter(controller: SessionController, answer_event: AstrMessageEvent):
+                nonlocal first_correct_time, winners_list
+                
+                answer_text = answer_event.message_str.strip()
+                
+                # 移除对!前缀的强制要求
+                answer_name = re.sub(r"^[!！]", "", answer_text).lower()
+
+                if answer_name:
+                    # 验证输入是否为有效的角色名称或别名
+                    if answer_name not in self.valid_answers:
+                        # 输入不是有效的角色名称或别名，忽略该输入
+                        return
+                        
+                    game_session.guess_attempts_count += 1
+                    user_id = answer_event.get_sender_id()
+                    
+                    try:
+                        correct_name_abbr = game_session.game_data["character"]["name"].lower()
+                        correct_name_chinese = game_session.game_data["character"]["fullNameChinese"].lower()
+                        aliases = game_session.game_data["character"].get("aliases", [])
+                        
+                        # 检查是否匹配任何一个可能的答案（缩写、中文名称、别名）
+                        is_correct = answer_name == correct_name_abbr or answer_name == correct_name_chinese
+                        
+                        # 检查是否匹配任何一个别名
+                        if not is_correct:
+                            for alias in aliases:
+                                if answer_name == alias.lower():
+                                    is_correct = True
+                                    break
+
+                        if is_correct:
+                            winner_name = answer_event.get_sender_name()
+                            score = game_session.game_data["score"]
+                            current_time = time.time()
+                            
+                            if not game_session.winner_info:
+                                first_correct_time = current_time
+                                
+                                game_session.winner_info = {"name": winner_name, "id": user_id, "score": score}
+                                
+                                winners_list.append({
+                                    'user_id': user_id,
+                                    'user_name': winner_name,
+                                    'answer_time': current_time,
+                                    'is_first': True
+                                })
+                                
+                                if reward_valid_time > 0:
+                                    async def stop_after_delay():
+                                        await asyncio.sleep(reward_valid_time)
+                                        controller.stop()
+                                    asyncio.create_task(stop_after_delay())
+                                else:
+                                    controller.stop()
+                                    return
+                            else:
+                                time_since_first_correct = current_time - first_correct_time
+                                if time_since_first_correct <= reward_valid_time and reward_valid_time > 0:
+                                    if not any(w['user_id'] == user_id for w in winners_list):
+                                        winners_list.append({
+                                            'user_id': user_id,
+                                            'user_name': winner_name,
+                                            'answer_time': current_time,
+                                            'is_first': False
+                                        })
+                        else:
+                            # 测试模式不扣分或记录错误次数
+                            pass
+                    except (ValueError, IndexError):
+                        pass
+
+                    # 如果达到猜测次数上限，则结束游戏（-1表示无限制）
+                    if max_guess_attempts != -1 and game_session.guess_attempts_count >= max_guess_attempts:
+                        game_session.game_ended_by_attempts = True
+                        controller.stop()
+
+            try:
+                await guess_waiter(event)
+            except TimeoutError:
+                game_session.game_ended_by_timeout = True
+            
+            # 记录游戏结束时间，无论游戏如何结束
+            self.last_game_end_time[session_id] = time.time()
+
+            # --- 统一在游戏结束后公布结果 ---
+            correct_name = game_session.game_data['character']['fullNameChinese']
+
+            text_msg = []
+            if game_session.winner_info:
+                if len(winners_list) == 1:
+                    # 测试模式不加分
+                    text_msg.append(Comp.Plain(f"【测试模式】{game_session.winner_info['name']}答对了呢!（测试模式不计分）\n正确答案是: {correct_name}"))
+                else:
+                    winner_names = [w['user_name'] for w in winners_list]
+                    text_msg.append(Comp.Plain(
+                        f"🎉 【测试模式】恭喜以下玩家答对！（测试模式不计分）\n"
+                        f"{'、'.join(winner_names)}\n\n"
+                        f"正确答案是: {correct_name}"
+                    ))
+                    
+            elif game_session.game_ended_by_attempts:
+                text_msg.append(Comp.Plain(f"哎呀，本轮猜测次数已经用完了呢~ 没关系，下次一定可以的！\n"))
+                text_msg.append(Comp.Plain(f"正确答案是: {correct_name}\n"))
+            elif game_session.game_ended_by_timeout:
+                text_msg.append(Comp.Plain("时间到啦~ 大家有没有猜出来呢？\n"))
+                text_msg.append(Comp.Plain(f"正确答案是: {correct_name}\n"))
+            
+            # --- 发送答案图片 ---
+            image_msg = []
+            if text_msg:
+                yield event.chain_result(text_msg)
+                
+                # 延迟一小会儿发送答案图片，提升体验
+                await asyncio.sleep(0.5)
+                
+                # 检查答案图片是否存在
+                card_image_source = game_data.get("card_image_source")
+                if str(card_image_source).startswith(("http://", "https://")):
+                    # 远程图片，下载并发送
+                    img = await self._open_image(card_image_source)
+                    if img:
+                        try:
+                            # 优化答案图片大小，加快发送速度
+                            optimized_path = self.output_dir / f"answer_{game_data['card']['assetbundleName']}_{game_data['card_state']}.png"
+                            if not optimized_path.exists():
+                                # 限制最大尺寸为 800px
+                                img.thumbnail((800, 800), Image.Resampling.LANCZOS)
+                                img.save(optimized_path, "PNG", optimize=True)
+                            image_msg.append(Comp.Image(file=str(optimized_path)))
+                        except Exception as e:
+                            logger.error(f"保存优化后的答案图片失败: {e}")
+                            image_msg.append(Comp.Image(file=str(card_image_source)))
+                        finally:
+                            if img:
+                                img.close()
+                    else:
+                        # 本地图片直接发送
+                        image_msg.append(Comp.Image(file=str(card_image_source)))
+                
+                if image_msg:
+                    yield event.chain_result(image_msg)
+
+        finally:
+            if session_id in self.active_game_sessions:
+                self.active_game_sessions.remove(session_id)
+            # 清理游戏会话状态
+            if session_id in self.game_sessions:
+                del self.game_sessions[session_id]
+            # 不再删除锁实例，保留锁以维持互斥机制
 
     @filter.command("猜卡面帮助")
     async def show_guess_card_help(self, event: AstrMessageEvent):
