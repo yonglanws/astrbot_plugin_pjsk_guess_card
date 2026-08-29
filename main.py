@@ -93,8 +93,9 @@ DEFAULT_CONNECT_TEMPLATE = '<qqbot-cmd-input text="{encoded_command}" show="{enc
 # 旧版本默认模板特征：命中即视为未自定义，自动升级到新默认模板
 _LEGACY_TEMPLATE_MARKERS = ("{encoded_at_text}", "mqqapi://")
 
-# 快捷入口：所有 PJSK 娱乐插件的触发指令，Wordle 固定排最后
-_QUICK_ENTRIES = ["猜歌", "猜曲绘", "猜卡面", "歌词猜曲", "Wordle"]
+# 资源服务器根地址：按当前题库服务器选择。可由配置覆盖。
+DEFAULT_JP_RESOURCE_URL_BASE = "https://storage.exmeaning.com/sekai-jp-assets"
+DEFAULT_SC_RESOURCE_URL_BASE = "https://storage.exmeaning.com/sekai-sc-assets"
 
 
 class BindingSessionFilter(SessionFilter):
@@ -749,6 +750,17 @@ class GuessCardPlugin(Star):  # type: ignore
         result.use_markdown(True)
         await event.send(result)
 
+    def _get_quick_entries(self) -> list[str]:
+        """读取快捷入口配置；若列表为空则不显示快捷入口。"""
+        entries = self.config.get("quick_entries")
+        if not entries:
+            return []
+        cleaned = [str(x).strip() for x in entries if str(x).strip()]
+        wordle = "Wordle"
+        if wordle in cleaned:
+            cleaned = [x for x in cleaned if x != wordle] + [wordle]
+        return cleaned
+
     def _build_server_footer(self, event: AstrMessageEvent, server: str) -> list:
         """构建结算消息的题库服务器尾部：官机附 markdown 连接入口与快捷入口，普通 QQ 仅提示指令。"""
         other = SERVER_SC if server == SERVER_JP else SERVER_JP
@@ -765,10 +777,11 @@ class GuessCardPlugin(Star):  # type: ignore
                 lines.append(
                     "  ".join(self._build_connect_link(name, self_id) for name in account_links)
                 )
-                if _QUICK_ENTRIES:
+                entries = self._get_quick_entries()
+                if entries:
                     lines.append("快捷入口：")
                     lines.append(
-                        "  ".join(self._build_connect_link(name, self_id) for name in _QUICK_ENTRIES)
+                        "  ".join(self._build_connect_link(name, self_id) for name in entries)
                     )
                 return lines
         # 普通号（或拿不到官机 self_id 时的兜底）
@@ -1037,10 +1050,12 @@ class GuessCardPlugin(Star):  # type: ignore
             except Exception as e:
                 logger.error(f"猜卡插件周期性清理任务失败: {e}", exc_info=True)
 
-    def _get_resource_url(self, relative_path: str) -> str:
-        """返回远程资源的URL字符串"""
-        base_url = "https://storage.exmeaning.com/sekai-jp-assets/character"
-        return f"{base_url}/{'/'.join(Path(relative_path).parts)}"
+    def _get_resource_url(self, relative_path: str, server: str = SERVER_JP) -> str:
+        """返回当前题库服务器对应的远程卡面 URL。"""
+        config_key = "sc_resource_url_base" if server == SERVER_SC else "jp_resource_url_base"
+        default = DEFAULT_SC_RESOURCE_URL_BASE if server == SERVER_SC else DEFAULT_JP_RESOURCE_URL_BASE
+        base_url = str(self.config.get(config_key, default) or default).strip().rstrip("/")
+        return f"{base_url}/character/{'/'.join(Path(relative_path).parts)}"
 
     async def _open_image(self, image_source: Union[Path, str]) -> Optional[Image.Image]:
         """打开一个资源图片，无论是本地路径还是远程URL。"""
@@ -1246,7 +1261,7 @@ class GuessCardPlugin(Star):  # type: ignore
             return await asyncio.to_thread(self._apply_effects_sync, image_source, effect_names)
 
     # --- 游戏逻辑 ---
-    def start_new_game(self, force_effect_names: Optional[list] = None, card_pool: Optional[list] = None) -> Optional[dict]:
+    def start_new_game(self, force_effect_names: Optional[list] = None, card_pool: Optional[list] = None, server: str = SERVER_JP) -> Optional[dict]:
         """准备一轮新游戏，加入花前/花后逻辑和图片效果"""
         if not self.characters_map:
             logger.error("无法开始游戏，因为角色数据未成功加载。")
@@ -1287,7 +1302,9 @@ class GuessCardPlugin(Star):  # type: ignore
         return {
             "card": card,
             "card_state": card_type,
-            "card_image_source": self._get_resource_url(f'member/{card["assetbundleName"]}/{answer_image_filename}'),
+            "card_image_source": self._get_resource_url(
+                f'member/{card["assetbundleName"]}/{answer_image_filename}', server
+            ),
             "character": character,
             "score": base_score,
             "show_rarity_hint": show_rarity_hint,
@@ -1439,7 +1456,8 @@ class GuessCardPlugin(Star):  # type: ignore
 
         try:
             game_data = self.start_new_game(
-                card_pool=self._get_cards_for_session(session_id)
+                card_pool=self._get_cards_for_session(session_id),
+                server=self._server_for_session(session_id),
             )
             if not game_data:
                 yield event.plain_result("......开始游戏失败，可能是缺少资源文件或配置错误，请联系管理员。")
@@ -1489,7 +1507,7 @@ class GuessCardPlugin(Star):  # type: ignore
 
             if in_auto_mode:
                 # 自动模式：不出现 markdown 按钮，用文字提示退出方式
-                intro_full += "\n发送「仅退出本局」可结束本局，发送「退出自动模式」可停止自动模式。"
+                intro_full += "\n发送「退出」可结束自动模式，发送「退出本局」可提前结束这一局。"
                 yield event.chain_result([Comp.Plain(intro_full)])
             elif is_official_round and official_self_id:
                 # 官方机器人以 markdown 发送开局消息，附"仅退出本局 / 退出自动模式"连接
@@ -1507,6 +1525,8 @@ class GuessCardPlugin(Star):  # type: ignore
                     yield event.plain_result("发送开局消息时出错，游戏中断。")
                     return
             else:
+                # 普通模式（非官机）：提示「退出本局」指令可提前结束这一局
+                intro_full += "\n发送「退出本局」可提前结束这一局。"
                 try:
                     yield event.chain_result([Comp.Plain(intro_full)])
                 except Exception as e:
@@ -1564,7 +1584,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 answer_text = answer_event.message_str.strip()
 
                 # 仅退出本局：只在游玩时生效，立即结束当前对局（不影响自动模式）
-                if answer_text == "仅退出本局":
+                if answer_text in ["仅退出本局", "退出本局"]:
                     game_session.game_ended_by_quit = True
                     controller.stop()
                     return

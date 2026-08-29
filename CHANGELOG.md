@@ -1,6 +1,7 @@
 # 更新日志
 
 ### v2.0.0
+- **双服资源路由**：卡面资源随当前题库服务器自动切换：日服使用 `https://storage.exmeaning.com/sekai-jp-assets`，国服使用 `https://storage.exmeaning.com/sekai-sc-assets`；新增 `jp_resource_url_base` / `sc_resource_url_base` 配置项
 
 - **卡池 master 数据自动同步**：卡池改从 Haruki master 数据（`cards.json`，仅三星/四星）自动拉取，每 24 小时检查一次，新卡随游戏版本更新自动入库；GitHub API 不可用时回退 jsDelivr，dataVersion 未变化时跳过大文件下载
 - **新增日服/国服题库切换**：`猜卡面切换日服题库` / `猜卡面切换国服题库`，按群独立记忆，结算显示当前题库服务器

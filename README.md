@@ -10,7 +10,7 @@
 - 🔄 **题库自动同步**：卡池数据自 Haruki master（`cards.json`，三星/四星卡）每 24 小时自动同步，新卡随游戏版本更新自动入库，版本未变跳过大文件下载
 - 🌐 **多服务器题库**：支持日服 / 国服题库自由切换，按群独立记忆
 - 🏆 **精美数据面板**：内置积分排行榜（Pillow 本地渲染，支持自定义名称、未绑定 QQ 徽章）、个人战绩查询、每日次数限制与冷却
-- 🤖 **QQ 官方机器人支持**：官机 markdown 渲染，开局附操作连接，结算附切换题库/绑定/查分/排行榜连接与快捷入口；支持绑定普通 QQ 迁移分数
+- 🤖 **QQ 官方机器人支持**：官机 markdown 渲染，开局附操作连接，结算附切换题库/绑定/查分/排行榜连接；快捷入口由 `quick_entries` 配置控制（默认关闭）；支持绑定普通 QQ 迁移分数
 - ⚡ **双模式退出**：`仅退出本局` 与 `退出自动模式` 严格分离，自动模式精简无扰
 
 ## 指令
@@ -60,6 +60,10 @@
 | `default_server` | string | `jp` | 默认题库服务器（`jp`=日服 / `sc`=国服） |
 | `update_interval_hours` | int | `24` | 卡池 master 数据自动更新间隔（小时） |
 | `connect_link_template` | string | （官方标签） | QQ 官方机器人结算连接的 markdown 模板 |
+| `quick_entries` | list | `[]` | 结算快捷入口指令列表；为空时不显示快捷入口 |
+| `jp_resource_url_base` | string | `https://storage.exmeaning.com/sekai-jp-assets` | 日服卡面资源根地址 |
+| `sc_resource_url_base` | string | `https://storage.exmeaning.com/sekai-sc-assets` | 国服卡面资源根地址 |
+| `quick_entries` | list | `[]` | 结算快捷入口列表（若为空则不显示快捷入口） |
 | `answer_timeout` | int | `30` | 答题超时时间（秒） |
 | `daily_play_limit` | int | `10` | 每日游戏次数上限（-1 为无限制） |
 | `game_cooldown_seconds` | int | `60` | 游戏冷却时间（秒） |
@@ -77,7 +81,8 @@
 - 日服master：[Team-Haruki/haruki-sekai-master](https://github.com/Team-Haruki/haruki-sekai-master)
 - 国服master：[Team-Haruki/haruki-sekai-sc-master](https://github.com/Team-Haruki/haruki-sekai-sc-master)
 - 角色数据：`characters.json`（内置 26 位角色中文名与别名映射）
-- 卡面图片：`storage.exmeaning.com/sekai-jp-assets/character`(MoeSEKAI源)
+- 日服卡面资源：`https://storage.exmeaning.com/sekai-jp-assets/character`
+- 国服卡面资源：`https://storage.exmeaning.com/sekai-sc-assets/character`
 
 优先走 GitHub Contents API（大文件走 raw 媒体类型通道），失败时回退 jsDelivr CDN。数据持久化于 `data/plugin_data/pjsk_guess_card/`。
 

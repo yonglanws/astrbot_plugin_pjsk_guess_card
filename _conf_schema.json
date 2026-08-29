@@ -308,5 +308,26 @@
         }
       }
     }
+  },
+  "quick_entries": {
+    "description": "结算快捷入口列表（仅QQ官方机器人）",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [],
+    "hint": "游戏结算消息末尾显示的快捷入口指令列表（如：猜歌、猜曲绘、猜卡面、歌词猜曲、Wordle）。若列表为空则不显示快捷入口。"
+  },
+  "jp_resource_url_base": {
+    "description": "日服资源服务器地址",
+    "type": "string",
+    "default": "https://storage.exmeaning.com/sekai-jp-assets",
+    "hint": "日服题库使用的卡面/曲绘/音频资源根地址，末尾不需要加 /。"
+  },
+  "sc_resource_url_base": {
+    "description": "国服资源服务器地址",
+    "type": "string",
+    "default": "https://storage.exmeaning.com/sekai-sc-assets",
+    "hint": "国服题库使用的卡面/曲绘/音频资源根地址，末尾不需要加 /。"
   }
 }
