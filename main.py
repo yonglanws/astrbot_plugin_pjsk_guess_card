@@ -1510,13 +1510,11 @@ class GuessCardPlugin(Star):  # type: ignore
                 intro_full += "\n发送「退出」可结束自动模式，发送「退出本局」可提前结束这一局。"
                 yield event.chain_result([Comp.Plain(intro_full)])
             elif is_official_round and official_self_id:
-                # 官方机器人以 markdown 发送开局消息，附"仅退出本局 / 退出自动模式"连接
+                # 官方机器人以 markdown 发送开局消息，附"仅退出本局"连接
                 # （回答仍监听全部消息，无需点击回答）
                 intro_full += (
                     "\n"
                     + self._build_connect_link("仅退出本局", official_self_id)
-                    + "  "
-                    + self._build_connect_link("退出自动模式", official_self_id)
                 )
                 try:
                     await self._send_markdown_text(event, intro_full)
