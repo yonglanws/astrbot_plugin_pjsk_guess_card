@@ -740,6 +740,10 @@ class GuessCardPlugin(Star):  # type: ignore
             encoded_at_text=quote(at_text, safe=""),
         )
 
+    def _get_official_connect_id(self, event: AstrMessageEvent) -> str:
+        """返回官机连接模板的兼容 ID；默认 qqbot-cmd-input 不依赖该值。"""
+        return self._get_official_self_id(event) or "qq_official"
+
     def _get_official_self_id(self, event: AstrMessageEvent) -> str:
         return str(getattr(event.message_obj, "self_id", "") or "").strip()
 
@@ -769,7 +773,7 @@ class GuessCardPlugin(Star):  # type: ignore
         lines = [f"本局题库服务器：{SERVER_LABELS[server]}"]
 
         if self._get_event_platform_name(event) == OFFICIAL_PLATFORM_NAME:
-            self_id = self._get_official_self_id(event)
+            self_id = self._get_official_connect_id(event)
             if self_id:
                 lines.append(self._build_connect_link(connect_switch_cmd, self_id))
                 # 切换指令下方：绑定 / 查分 / 排行榜连接
@@ -1502,26 +1506,34 @@ class GuessCardPlugin(Star):  # type: ignore
             hint_text = "\n".join(hints) + "\n" if hints else ""
 
             intro_full = intro_text + effect_text + hint_text
+            is_official_round = self._get_event_platform_name(event) == OFFICIAL_PLATFORM_NAME
             in_auto_mode = session_id in self.auto_game_sessions
-            official_self_id = self._get_official_self_id(event) if is_official_round else ""
+            official_self_id = self._get_official_connect_id(event) if is_official_round else ""
 
-            if in_auto_mode:
-                # 自动模式：不出现 markdown 按钮，用文字提示退出方式
-                intro_full += "\n发送「退出」可结束自动模式，发送「退出本局」可提前结束这一局。"
-                yield event.chain_result([Comp.Plain(intro_full)])
-            elif is_official_round and official_self_id:
-                # 官方机器人以 markdown 发送开局消息，附"仅退出本局"连接
-                # （回答仍监听全部消息，无需点击回答）
-                intro_full += (
-                    "\n"
-                    + self._build_connect_link("仅退出本局", official_self_id)
-                )
+            if is_official_round:
+                # 官方机器人以 markdown 发送开局消息
+                if in_auto_mode:
+                    intro_full += (
+                        "\n"
+                        + self._build_connect_link("退出本局", official_self_id)
+                        + "  "
+                        + self._build_connect_link("退出自动模式", official_self_id)
+                    )
+                else:
+                    intro_full += (
+                        "\n"
+                        + self._build_connect_link("退出本局", official_self_id)
+                    )
                 try:
                     await self._send_markdown_text(event, intro_full)
                 except Exception as e:
                     logger.error(f"发送开局消息失败: {e}", exc_info=True)
                     yield event.plain_result("发送开局消息时出错，游戏中断。")
                     return
+            elif in_auto_mode:
+                # 自动模式（非官机）：文字提示退出方式
+                intro_full += "\n发送「退出」可结束自动模式，发送「退出本局」可提前结束这一局。"
+                yield event.chain_result([Comp.Plain(intro_full)])
             else:
                 # 普通模式（非官机）：提示「退出本局」指令可提前结束这一局
                 intro_full += "\n发送「退出本局」可提前结束这一局。"

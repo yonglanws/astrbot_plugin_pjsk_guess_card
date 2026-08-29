@@ -33,6 +33,15 @@
     "default": "<qqbot-cmd-input text=\"{encoded_command}\" show=\"{encoded_name}\" />",
     "hint": "结算消息中连接入口的 markdown 模板（QQ 官方 markdown 参数指令标签，点击后自动在聊天框填入指令，QQ 客户端发送时自动 @ 官机）。占位符：{name}=显示名，{command}=指令原文，{self_id}=官机ID，{at_text}=@官机+指令，{encoded_name}/{encoded_command}/{encoded_at_text}=对应 URL 编码。清空该配置则退回纯文本“（连接：@官机 指令）”形式。"
   },
+  "quick_entries": {
+    "description": "结算快捷入口列表（仅QQ官方机器人）",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [],
+    "hint": "游戏结算消息末尾显示的快捷入口指令列表（如：猜歌、猜曲绘、猜卡面、歌词猜曲、Wordle）。若列表为空则不显示快捷入口。"
+  },
   "answer_timeout": {
     "description": "猜卡游戏的答题时长（秒）",
     "type": "int",
@@ -320,14 +329,5 @@
         }
       }
     }
-  },
-  "quick_entries": {
-    "description": "结算快捷入口列表（仅QQ官方机器人）",
-    "type": "list",
-    "items": {
-      "type": "string"
-    },
-    "default": [],
-    "hint": "游戏结算消息末尾显示的快捷入口指令列表（如：猜歌、猜曲绘、猜卡面、歌词猜曲、Wordle）。若列表为空则不显示快捷入口。"
   }
 }
