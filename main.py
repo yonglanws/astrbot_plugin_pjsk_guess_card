@@ -1593,8 +1593,8 @@ class GuessCardPlugin(Star):  # type: ignore
                 
                 answer_text = answer_event.message_str.strip()
 
-                # 仅退出本局：只在游玩时生效，立即结束当前对局（不影响自动模式）
-                if answer_text in ["仅退出本局", "退出本局"]:
+                # 仅退出本局：支持「仅退出本局」、「退出本局」；若非自动模式，发送「退出」也视为退出本局
+                if answer_text in ["仅退出本局", "退出本局"] or (answer_text == "退出" and session_id not in self.auto_game_sessions):
                     game_session.game_ended_by_quit = True
                     controller.stop()
                     return
