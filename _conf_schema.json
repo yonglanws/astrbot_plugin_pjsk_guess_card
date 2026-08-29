@@ -1,4 +1,26 @@
 {
+  "default_server": {
+    "description": "默认题库服务器",
+    "type": "string",
+    "options": [
+      "jp",
+      "sc"
+    ],
+    "default": "jp",
+    "hint": "jp=日服题库（haruki-sekai-master），sc=国服题库（haruki-sekai-sc-master）。群内可用指令临时切换。"
+  },
+  "update_interval_hours": {
+    "description": "题库自动更新间隔（小时）",
+    "type": "int",
+    "default": 24,
+    "hint": "master 题库每 24 小时自动检查一次，仅在游戏数据版本变化时重新下载大文件。"
+  },
+  "connect_link_template": {
+    "description": "指令连接的 markdown 模板（仅QQ官方机器人）",
+    "type": "string",
+    "default": "<qqbot-cmd-input text=\"{encoded_command}\" show=\"{encoded_name}\" />",
+    "hint": "结算消息中连接入口的 markdown 模板（QQ 官方 markdown 参数指令标签，点击后自动在聊天框填入指令，QQ 客户端发送时自动 @ 官机）。占位符：{name}=显示名，{command}=指令原文，{self_id}=官机ID，{at_text}=@官机+指令，{encoded_name}/{encoded_command}/{encoded_at_text}=对应 URL 编码。清空该配置则退回纯文本“（连接：@官机 指令）”形式。"
+  },
   "answer_timeout": {
     "description": "猜卡游戏的答题时长（秒）",
     "type": "int",
@@ -78,19 +100,19 @@
         "default": {},
         "items": {
           "enabled": {
-            "type": "bool", 
+            "type": "bool",
             "default": true,
             "description": "是否启用",
             "hint": "勾选此项以启用轻度模糊效果"
           },
           "difficulty": {
-            "type": "int", 
+            "type": "int",
             "default": 1,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
           "blur_radius": {
-            "type": "int", 
+            "type": "int",
             "default": 25,
             "description": "模糊半径",
             "hint": "控制模糊效果的强度，值越大越模糊"
@@ -103,19 +125,19 @@
         "default": {},
         "items": {
           "enabled": {
-            "type": "bool", 
+            "type": "bool",
             "default": true,
             "description": "是否启用",
             "hint": "勾选此项以启用重度模糊效果"
           },
           "difficulty": {
-            "type": "int", 
+            "type": "int",
             "default": 2,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
           "blur_radius": {
-            "type": "int", 
+            "type": "int",
             "default": 55,
             "description": "模糊半径",
             "hint": "控制模糊效果的强度，值越大越模糊"
@@ -128,19 +150,19 @@
         "default": {},
         "items": {
           "enabled": {
-            "type": "bool", 
+            "type": "bool",
             "default": true,
             "description": "是否启用",
             "hint": "勾选此项以启用分块打乱(简易)效果"
           },
           "difficulty": {
-            "type": "int", 
+            "type": "int",
             "default": 1,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
           "block_size": {
-            "type": "int", 
+            "type": "int",
             "default": 125,
             "description": "区块大小",
             "hint": "控制分块的大小，值越大区块越少"
@@ -153,19 +175,19 @@
         "default": {},
         "items": {
           "enabled": {
-            "type": "bool", 
+            "type": "bool",
             "default": true,
             "description": "是否启用",
             "hint": "勾选此项以启用分块打乱(困难)效果"
           },
           "difficulty": {
-            "type": "int", 
+            "type": "int",
             "default": 3,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
           "block_size": {
-            "type": "int", 
+            "type": "int",
             "default": 55,
             "description": "区块大小",
             "hint": "控制分块的大小，值越大区块越少"
@@ -178,19 +200,19 @@
         "default": {},
         "items": {
           "enabled": {
-            "type": "bool", 
+            "type": "bool",
             "default": true,
             "description": "是否启用",
             "hint": "勾选此项以启用横向切割效果"
           },
           "difficulty": {
-            "type": "int", 
+            "type": "int",
             "default": 1,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
           "slice_count": {
-            "type": "int", 
+            "type": "int",
             "default": 45,
             "description": "切割数量",
             "hint": "控制将图片切割为多少个长条"
@@ -203,19 +225,19 @@
         "default": {},
         "items": {
           "enabled": {
-            "type": "bool", 
+            "type": "bool",
             "default": true,
             "description": "是否启用",
             "hint": "勾选此项以启用纵向切割效果"
           },
           "difficulty": {
-            "type": "int", 
+            "type": "int",
             "default": 1,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
           "slice_count": {
-            "type": "int", 
+            "type": "int",
             "default": 65,
             "description": "切割数量",
             "hint": "控制将图片切割为多少个长条"
@@ -228,19 +250,19 @@
         "default": {},
         "items": {
           "enabled": {
-            "type": "bool", 
+            "type": "bool",
             "default": true,
             "description": "是否启用",
             "hint": "勾选此项以启用截取区域效果"
           },
           "difficulty": {
-            "type": "int", 
+            "type": "int",
             "default": 2,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
           },
           "crop_ratio": {
-            "type": "float", 
+            "type": "float",
             "default": 0.3,
             "description": "截取比例",
             "hint": "控制截取区域占原图的比例（0.1-0.9），值越小截取的区域越小越难猜"
@@ -253,13 +275,13 @@
         "default": {},
         "items": {
           "enabled": {
-            "type": "bool", 
+            "type": "bool",
             "default": true,
             "description": "是否启用",
             "hint": "勾选此项以启用两长条截取效果"
           },
           "difficulty": {
-            "type": "int", 
+            "type": "int",
             "default": 2,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
@@ -272,13 +294,13 @@
         "default": {},
         "items": {
           "enabled": {
-            "type": "bool", 
+            "type": "bool",
             "default": true,
             "description": "是否启用",
             "hint": "勾选此项以启用三长条截取效果"
           },
           "difficulty": {
-            "type": "int", 
+            "type": "int",
             "default": 2,
             "description": "分数",
             "hint": "控制猜对时获得的分数"
@@ -287,4 +309,4 @@
       }
     }
   }
-} 
+}

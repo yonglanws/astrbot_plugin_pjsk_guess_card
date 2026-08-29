@@ -219,3 +219,6 @@ resources/*
 !resources/font.ttf
 !resources/guess_cards.json
 !resources/ranking_bg.png
+
+tests/
+pyproject.toml

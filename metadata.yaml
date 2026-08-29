@@ -4,3 +4,6 @@ desc: PJSK猜卡面插件，用户可以猜经过特殊处理后的卡面中的�
 version: v1.9.0 # 插件版本号。格式：v1.1.1 或者 v1.1
 author: 慵懒午睡 # 作者
 repo: https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card # 插件的仓库地址
+support_platforms:                         # （可选）支持的平台适配器列表
+   - aiocqhttp
+   - qq_official
