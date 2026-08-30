@@ -220,5 +220,6 @@ resources/*
 !resources/guess_cards.json
 !resources/ranking_bg.png
 
-tests/
+tests/_render_out/
+tests/_integration/
 pyproject.toml

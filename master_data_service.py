@@ -284,21 +284,27 @@ class MasterDataService:
             logger.warning(f"[PJSK猜卡面] {SERVER_LABELS[server]}离线重建失败: {e}")
             return False
 
+    @staticmethod
+    def _atomic_write_json(path: Path, data, *, indent: int | None = None) -> None:
+        temp_path = path.with_suffix(f"{path.suffix}.tmp")
+        temp_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=indent), encoding="utf-8"
+        )
+        temp_path.replace(path)
+
     def _store_server(self, server: str, parsed: dict, data_version: str, via: str):
         """落盘原始文件并重建派生题库。"""
         sdir = self._server_dir(server)
         sdir.mkdir(parents=True, exist_ok=True)
         for name, data in parsed.items():
-            (sdir / name).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            self._atomic_write_json(sdir / name, data)
 
         cards = self._build_derived(parsed)
         if not cards:
             raise RuntimeError(f"{SERVER_LABELS[server]}卡牌题库解析结果为空")
 
         self.cards[server] = cards
-        self.derived_path[server].write_text(
-            json.dumps(cards, ensure_ascii=False), encoding="utf-8"
-        )
+        self._atomic_write_json(self.derived_path[server], cards)
 
         display_version = data_version or datetime.now().strftime("%Y%m%d")
         servers = self.meta.setdefault("servers", {})
@@ -357,9 +363,7 @@ class MasterDataService:
 
     def _save_meta(self):
         self.card_dir.mkdir(parents=True, exist_ok=True)
-        self.meta_path.write_text(
-            json.dumps(self.meta, ensure_ascii=False, indent=1), encoding="utf-8"
-        )
+        self._atomic_write_json(self.meta_path, self.meta, indent=1)
 
     def _load_derived(self, server: str) -> bool:
         path = self.derived_path[server]

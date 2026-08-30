@@ -6,7 +6,6 @@ import time
 import os
 import sqlite3
 import io
-from contextlib import closing
 from pathlib import Path
 from typing import Optional, Union
 from collections import OrderedDict
@@ -14,7 +13,7 @@ from collections import OrderedDict
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from datetime import datetime
 from pilmoji import Pilmoji
-from urllib.parse import urlparse, quote
+from urllib.parse import quote
 
 # 尝试导入 aiohttp，作为可选依赖
 try:
@@ -22,14 +21,6 @@ try:
 except ImportError:
     aiohttp = None
 
-
-try:
-    # 兼容Pillow >= 9.1.0, 使用 Resampling 枚举
-    from PIL.Image import Resampling
-    LANCZOS = Resampling.LANCZOS
-except ImportError:
-    # 兼容Pillow < 9.1.0, ANTIALIAS 的值为 1，直接使用该值以绕过linter
-    LANCZOS = 1
 
 # AstrBot's recommended logger. If this fails, the environment is likely misconfigured.
 
@@ -69,7 +60,7 @@ except ImportError:  # 直接以脚本方式加载（单测）时使用绝对导
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "2.0.0"
+PLUGIN_VERSION = "2.0.1"
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 DEFAULT_PLATFORM_NAME = "aiocqhttp"
 OFFICIAL_PLATFORM_NAME = "qq_official"
@@ -571,20 +562,21 @@ class ImageEffectProcessor:
         return result
     
     def random_effect(self):
-        """随机选择一个效果"""
+        """随机选择一个启用的效果，允许全部效果关闭。"""
         enabled = self.get_enabled_effects()
         logger.info(f"启用的效果列表: {enabled}")
-        return random.choice(enabled)
-    
+        return random.choice(enabled) if enabled else "none"
+
     def random_effect_combination(self):
-        """随机选择一个效果组合"""
+        """随机选择一个效果组合。"""
+        effect = self.random_effect()
+        if effect == "none":
+            return ["none"], "无效果"
         if self.COMBINATIONS and random.random() < 0.3:
             combo_key = random.choice(list(self.COMBINATIONS.keys()))
             combo = self.COMBINATIONS[combo_key]
             return combo["effects"], combo["name"]
-        else:
-            effect = self.random_effect()
-            return [effect], self.EFFECTS[effect]["name"]
+        return [effect], self.EFFECTS[effect]["name"]
 
 
 # --- 核心插件类 ---
@@ -621,10 +613,7 @@ class GuessCardPlugin(Star):  # type: ignore
         
         # 图片处理缓存，提高重复图片处理性能
         self.image_cache = LRUCache(max_size=30)
-        
-        # 卡面路径缓存，避免重复构造路径
-        self.card_path_cache = LRUCache(max_size=100)
-        
+
         # 初始化图片效果处理器，从配置读取效果设置
         logger.info(f"完整配置: {dict(self.config)}")
         self.effect_processor = ImageEffectProcessor(self.config)
@@ -639,7 +628,8 @@ class GuessCardPlugin(Star):  # type: ignore
             logger.warning("`aiohttp` 模块未安装，远程图片功能将受限或性能较差。建议安装: pip install aiohttp")
 
         self._cleanup_task = None
-        self._background_tasks: set = set()
+        self._background_tasks: set[asyncio.Task] = set()
+        self._stopping = False
 
         # --- 题库服务器偏好与 master 数据自动同步 ---
         self.server_prefs_path = self.data_dir / "session_servers.json"
@@ -662,12 +652,16 @@ class GuessCardPlugin(Star):  # type: ignore
         self._cleanup_output_dir()
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup_task())
         self._track_task(self._cleanup_task)
-        self._master_task = asyncio.create_task(self._start_master_data())
+        self._master_task = self._track_task(asyncio.create_task(self._start_master_data()))
 
     async def _start_master_data(self):
         """启动卡牌题库自动同步服务。"""
+        if self._stopping:
+            return
         try:
             await self.master_data.start()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"卡牌题库同步服务启动失败: {e}", exc_info=True)
 
@@ -830,10 +824,11 @@ class GuessCardPlugin(Star):  # type: ignore
             self.id_font = default_font
             self.medal_font = default_font
 
-    def _track_task(self, task: asyncio.Task):
-        """跟踪后台任务，防止被GC回收"""
+    def _track_task(self, task: asyncio.Task) -> asyncio.Task:
+        """跟踪后台任务，防止被 GC 回收并支持插件终止时统一取消。"""
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+        return task
 
     def _build_valid_answers_set(self):
         """
@@ -1173,12 +1168,6 @@ class GuessCardPlugin(Star):  # type: ignore
             return msg.strip()
         return None
 
-    def get_conn(self) -> sqlite3.Connection:
-        """获取数据库连接，设置超时防止锁冲突"""
-        return sqlite3.connect(self.db_path, timeout=30.0)
-
-
-
     def _cleanup_output_dir(self, max_age_seconds: int = 3600):
         """清理旧的排行榜图片和模糊处理的图片，同时清理相关缓存"""
         if not self.output_dir.exists():
@@ -1233,16 +1222,17 @@ class GuessCardPlugin(Star):  # type: ignore
                     return None
                 
                 processed_img = self.effect_processor.apply_effects(img, effect_names)
-                
-                os.makedirs(self.output_dir, exist_ok=True)
-                img_path = self.output_dir / f"processed_{time.time_ns()}.png"
-                processed_img.save(img_path)
-                
-                # 存入缓存
-                result_path = str(img_path)
-                self.image_cache.set(cache_key, result_path)
-                
-                return result_path
+                try:
+                    os.makedirs(self.output_dir, exist_ok=True)
+                    img_path = self.output_dir / f"processed_{time.time_ns()}.png"
+                    processed_img.save(img_path)
+
+                    # 存入缓存
+                    result_path = str(img_path)
+                    self.image_cache.set(cache_key, result_path)
+                    return result_path
+                finally:
+                    processed_img.close()
         except Exception as e:
             logger.error(f"应用图片效果失败: {e}")
             return None
@@ -1255,10 +1245,13 @@ class GuessCardPlugin(Star):  # type: ignore
                 return None
             try:
                 processed_img = await asyncio.to_thread(self.effect_processor.apply_effects, img, effect_names)
-                os.makedirs(self.output_dir, exist_ok=True)
-                img_path = self.output_dir / f"processed_{time.time_ns()}.png"
-                await asyncio.to_thread(processed_img.save, img_path)
-                return str(img_path)
+                try:
+                    os.makedirs(self.output_dir, exist_ok=True)
+                    img_path = self.output_dir / f"processed_{time.time_ns()}.png"
+                    await asyncio.to_thread(processed_img.save, img_path)
+                    return str(img_path)
+                finally:
+                    processed_img.close()
             finally:
                 img.close()
         else:
@@ -1495,10 +1488,9 @@ class GuessCardPlugin(Star):  # type: ignore
                 state_text = "花后" if game_data["card_state"] == "after_training" else "花前"
                 hints.append(f"状态提示: {state_text}")
 
-            timeout_seconds = self.config.get("answer_timeout", 30)
+            timeout_seconds = max(1, min(int(self.config.get("answer_timeout", 30)), 3500))
             effect_name = game_data.get("effect_name", "无效果")
             difficulty = game_data.get("difficulty", 1)
-            difficulty_stars = "⭐" * difficulty
 
             intro_text = f"请在{timeout_seconds}秒内发送角色名称缩写进行回答哦(无需@机器人)\n"
             effect_text = f"本轮图片效果: {effect_name}\n猜对得分: {difficulty}分\n"
@@ -1569,7 +1561,8 @@ class GuessCardPlugin(Star):  # type: ignore
                 return
             
             # 记录游戏开始，并增加该用户的每日游戏次数（在成功发送图片后才记次）
-            self._record_game_start(
+            await asyncio.to_thread(
+                self._record_game_start,
                 current_user_id,
                 event.get_sender_name(),
                 current_platform_name,
@@ -1662,7 +1655,7 @@ class GuessCardPlugin(Star):  # type: ignore
                                     async def stop_after_delay():
                                         await asyncio.sleep(reward_valid_time)
                                         controller.stop()
-                                    asyncio.create_task(stop_after_delay())
+                                    self._track_task(asyncio.create_task(stop_after_delay()))
                                 else:
                                     controller.stop()
                                     return
@@ -1684,7 +1677,7 @@ class GuessCardPlugin(Star):  # type: ignore
                                         logger.info(f"[猜卡面] 奖励有效时间内额外答对: {winner_name} (+{time_since_first_correct:.2f}s)")
                         else:
                             if (user_id, platform_name) not in game_session.user_stats_recorded:
-                                self._update_stats(
+                                await self._update_stats_async(
                                     user_id,
                                     answer_event.get_sender_name(),
                                     0,
@@ -1722,7 +1715,7 @@ class GuessCardPlugin(Star):  # type: ignore
 
             if game_session.winner_info:
                 if len(winners_list) == 1:
-                    self._update_stats(
+                    await self._update_stats_async(
                         game_session.winner_info['id'],
                         game_session.winner_info['name'],
                         game_session.winner_info['score'],
@@ -1733,7 +1726,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 else:
                     winner_names = [w['user_name'] for w in winners_list]
                     for winner in winners_list:
-                        self._update_stats(
+                        await self._update_stats_async(
                             winner['user_id'],
                             winner['user_name'],
                             game_session.winner_info['score'],
@@ -1890,8 +1883,11 @@ class GuessCardPlugin(Star):  # type: ignore
             self.active_game_sessions.add(session_id)
 
         try:
-            # 强制使用指定效果
-            game_data = self.start_new_game(force_effect_names=[effect_key])
+            game_data = self.start_new_game(
+                force_effect_names=[effect_key],
+                card_pool=self._get_cards_for_session(session_id),
+                server=self._server_for_session(session_id),
+            )
             if not game_data:
                 yield event.plain_result("......开始游戏失败，可能是缺少资源文件或配置错误，请联系管理员。")
                 return
@@ -1920,7 +1916,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 state_text = "花后" if game_data["card_state"] == "after_training" else "花前"
                 hints.append(f"状态提示: {state_text}")
 
-            timeout_seconds = self.config.get("answer_timeout", 30)
+            timeout_seconds = max(1, min(int(self.config.get("answer_timeout", 30)), 3500))
             effect_name = game_data.get("effect_name", "无效果")
             difficulty = game_data.get("difficulty", 1)
             
@@ -2020,7 +2016,7 @@ class GuessCardPlugin(Star):  # type: ignore
                                     async def stop_after_delay():
                                         await asyncio.sleep(reward_valid_time)
                                         controller.stop()
-                                    asyncio.create_task(stop_after_delay())
+                                    self._track_task(asyncio.create_task(stop_after_delay()))
                                 else:
                                     controller.stop()
                                     return
@@ -2592,33 +2588,46 @@ class GuessCardPlugin(Star):  # type: ignore
                 return True
             return False
 
+    async def _update_stats_async(
+        self,
+        user_id: str,
+        user_name: str,
+        score: int,
+        correct: bool,
+        platform_name: str = DEFAULT_PLATFORM_NAME,
+    ) -> None:
+        await asyncio.to_thread(
+            self._update_stats,
+            user_id,
+            user_name,
+            score,
+            correct,
+            platform_name,
+        )
+
     async def terminate(self):
-        """插件卸载或停用时调用"""
+        """插件卸载或停用时取消任务并释放网络资源。"""
         logger.info("正在关闭猜卡插件的后台任务...")
+        self._stopping = True
 
-        # 取消并等待所有后台任务完成
-        if self._background_tasks:
-            tasks = list(self._background_tasks)
-            for task in tasks:
-                task.cancel()
-            try:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            except Exception as e:
-                logger.warning(f"等待任务完成时出错: {e}")
-            self._background_tasks.clear()
+        tasks = [task for task in self._background_tasks if task is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
+        self.session_locks.clear()
 
-        # 停止卡牌题库自动同步服务
         try:
             await self.master_data.terminate()
         except Exception as e:
-            logger.warning(f"停止题库同步服务时出错: {e}")
+            logger.warning(f"停止卡牌题库同步服务时出错: {e}")
 
-        # 关闭 aiohttp session
         if self.http_session and not self.http_session.closed:
             try:
                 await self.http_session.close()
                 logger.info("aiohttp session已关闭。")
             except Exception as e:
                 logger.error(f"关闭 aiohttp session 时出错: {e}")
-
+        self.http_session = None
         logger.info("猜卡面插件已终止。")
