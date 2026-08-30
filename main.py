@@ -1827,6 +1827,14 @@ class GuessCardPlugin(Star):  # type: ignore
                     self.auto_game_sessions.pop(session_id, None)
                     yield event.plain_result("今天的游戏次数已经用完啦，自动猜卡面模式已停止。")
 
+    @filter.command("退出自动模式", alias={"退出", "停止自动猜卡", "停止自动猜卡面"})
+    async def quit_auto_mode(self, event: AstrMessageEvent):
+        """退出自动猜卡面模式（对局进行中时由对局等待器处理）"""
+        session_id = event.unified_msg_origin
+        if session_id not in self.auto_game_sessions:
+            return
+        self.auto_game_sessions.pop(session_id, None)
+        yield event.plain_result("已退出自动猜卡面模式。")
 
     @filter.command("测试猜卡")
     async def test_guess_card(self, event: AstrMessageEvent):
