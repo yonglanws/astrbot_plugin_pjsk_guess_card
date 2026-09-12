@@ -1,8 +1,9 @@
 # astrbot_plugin_pjsk_guess_card
 
-《初音未来 缤纷舞台》（Project SEKAI）**猜卡面**娱乐插件。插件随机展示一张经过特殊效果处理的角色卡面图片并给出少量提示（花前/花后、星级），玩家需在限时内猜出正确的角色名称。
+> [!IMPORTANT]
+> 本项目基于 [astrbot_plugin_pjsk_guess_card](https://github.com/nichinichisou0609/astrbot_plugin_pjsk_guess_card) **二次开发**，
 
-> 本插件 fork 自 [astrbot_plugin_pjsk_guess_card](https://github.com/nichinichisou0609/astrbot_plugin_pjsk_guess_card)。玩法更改为让玩家猜出卡面的角色名称，而不是卡面 ID，并增加了多种图片效果。
+《初音未来 缤纷舞台》（Project SEKAI）**猜卡面**娱乐插件。插件随机展示一张经过特殊效果处理的角色卡面图片并给出少量提示（花前/花后、星级），玩家需在限时内猜出正确的角色名称。
 
 ## 特性
 
