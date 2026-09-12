@@ -1,4 +1,4 @@
-# astrbot_plugin_pjsk_guess_card
+# PJSK猜卡面插件
 
 > [!IMPORTANT]
 > 本项目基于 [astrbot_plugin_pjsk_guess_card](https://github.com/nichinichisou0609/astrbot_plugin_pjsk_guess_card) **二次开发**，
