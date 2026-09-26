@@ -60,7 +60,7 @@ except ImportError:  # 直接以脚本方式加载（单测）时使用绝对导
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "2.2.0"
+PLUGIN_VERSION = "2.2.1"
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 DEFAULT_PLATFORM_NAME = "aiocqhttp"
 OFFICIAL_PLATFORM_NAME = "qq_official"
@@ -1398,7 +1398,22 @@ class GuessCardPlugin(Star):  # type: ignore
         """切换为日服题库。"""
         await self._switch_server(event, SERVER_JP)
 
-    @filter.command("猜卡面绑定", alias={"pjsk猜卡面绑定", "猜卡绑定", "猜卡面绑定QQ"})
+    @filter.command(
+        "猜卡面绑定",
+        alias={
+            "pjsk猜卡面绑定",
+            "猜卡绑定",
+            "猜卡面绑定QQ",
+            "猜卡绑定QQ",
+            "猜卡绑定qq",
+            "猜卡面绑定qq",
+            "pjsk猜卡面绑定QQ",
+            "pjsk猜卡面绑定qq",
+            "pjsk猜卡绑定",
+            "pjsk猜卡绑定QQ",
+            "pjsk猜卡绑定qq",
+        },
+    )
     async def bind_card_account(self, event: AstrMessageEvent):
         """QQ 官方机器人账号绑定到普通 QQ 账号。"""
         if not self._is_qq_official_event(event):
@@ -1457,7 +1472,22 @@ class GuessCardPlugin(Star):  # type: ignore
         else:
             yield event.plain_result("绑定失败：该官方账号可能已绑定，请稍后重试。")
 
-    @filter.command("猜卡面解绑", alias={"pjsk猜卡面解绑", "猜卡面解绑QQ"})
+    @filter.command(
+        "猜卡面解绑",
+        alias={
+            "pjsk猜卡面解绑",
+            "猜卡面解绑QQ",
+            "猜卡面解绑qq",
+            "猜卡解绑",
+            "猜卡解绑QQ",
+            "猜卡解绑qq",
+            "pjsk猜卡面解绑QQ",
+            "pjsk猜卡面解绑qq",
+            "pjsk猜卡解绑",
+            "pjsk猜卡解绑QQ",
+            "pjsk猜卡解绑qq",
+        },
+    )
     async def unbind_card_account(self, event: AstrMessageEvent):
         """解除 QQ 官方机器人账号与普通 QQ 账号的绑定。"""
         if not self._is_qq_official_event(event):
