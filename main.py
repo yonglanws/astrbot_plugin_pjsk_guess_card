@@ -60,7 +60,7 @@ except ImportError:  # 直接以脚本方式加载（单测）时使用绝对导
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "2.1.0"
+PLUGIN_VERSION = "2.2.0"
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 DEFAULT_PLATFORM_NAME = "aiocqhttp"
 OFFICIAL_PLATFORM_NAME = "qq_official"
@@ -1614,6 +1614,8 @@ class GuessCardPlugin(Star):  # type: ignore
                 if in_auto_mode:
                     intro_full += (
                         "\n"
+                        + self._build_connect_link(" ", official_self_id, show="点击回答")
+                        + "  "
                         + self._build_connect_link("退出本局", official_self_id)
                         + "  "
                         + self._build_connect_link("退出自动模式", official_self_id)
@@ -1621,6 +1623,8 @@ class GuessCardPlugin(Star):  # type: ignore
                 else:
                     intro_full += (
                         "\n"
+                        + self._build_connect_link(" ", official_self_id, show="点击回答")
+                        + "  "
                         + self._build_connect_link("退出本局", official_self_id)
                     )
                 try:
