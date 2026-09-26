@@ -60,7 +60,7 @@ except ImportError:  # 直接以脚本方式加载（单测）时使用绝对导
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "2.2.1"
+PLUGIN_VERSION = "2.3.0"
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 DEFAULT_PLATFORM_NAME = "aiocqhttp"
 OFFICIAL_PLATFORM_NAME = "qq_official"
@@ -2299,11 +2299,10 @@ class GuessCardPlugin(Star):  # type: ignore
         display_name = self._get_display_name(user_id, user_name)
         platform_display_name = {
             OFFICIAL_PLATFORM_NAME: "QQ官方机器人",
-            DEFAULT_PLATFORM_NAME: "普通QQ",
+            DEFAULT_PLATFORM_NAME: "QQ个人号",
         }.get(self._get_event_platform_name(event), self._get_event_platform_name(event))
         identity_lines = [
-            f"👤 用户ID: {raw_user_id}",
-            f"🌐 平台: {platform_display_name}（{self._get_event_platform_name(event)}）",
+            f"🌐 平台: {platform_display_name}",
         ]
         if self._get_event_platform_name(event) == OFFICIAL_PLATFORM_NAME and user_id == raw_user_id:
             identity_lines.extend([
