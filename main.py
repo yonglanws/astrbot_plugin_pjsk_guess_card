@@ -60,10 +60,11 @@ except ImportError:  # 直接以脚本方式加载（单测）时使用绝对导
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "2.0.2"
+PLUGIN_VERSION = "2.1.0"
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
 DEFAULT_PLATFORM_NAME = "aiocqhttp"
 OFFICIAL_PLATFORM_NAME = "qq_official"
+MAX_BINDINGS_PER_QQ = 2
 OFFICIAL_QID_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 
 # --- 题库服务器与官机 markdown 机制（与 PJSK Wordle 保持一致） ---
@@ -771,7 +772,7 @@ class GuessCardPlugin(Star):  # type: ignore
             if self_id:
                 lines.append(self._build_connect_link(connect_switch_cmd, self_id))
                 # 切换指令下方：绑定 / 查分 / 排行榜连接
-                account_links = ["猜卡面绑定QQ", "猜卡面个人分数", "猜卡面排行榜"]
+                account_links = ["猜卡面绑定QQ", "猜卡面个人分数", "猜卡面排行榜", "猜卡面解绑QQ"]
                 lines.append(
                     "  ".join(self._build_connect_link(name, self_id) for name in account_links)
                 )
@@ -910,11 +911,25 @@ class GuessCardPlugin(Star):  # type: ignore
         )
 
     @staticmethod
-    def _build_binding_confirmation_message(qq_user_id: str) -> str:
-        return (
-            f"你确认将账号绑定至  {qq_user_id} ？官方机作答的分数将迁移至该账号。\n"
-            "发送“确认”将开始绑定。发送“取消”将取消绑定。"
-        )
+    def _build_binding_confirmation_message(qq_user_id: str, bound_count: int = 0) -> str:
+        lines = [f"你确认将账号绑定至  {qq_user_id} ？官方机作答的分数将迁移至该账号。"]
+        if bound_count == 1:
+            lines.append(
+                "你已经绑定过一个官机了，你只能绑定两个官机，请确认你是否要绑定此账号。"
+            )
+        lines.append("发送“确认”将开始绑定。发送“取消”将取消绑定。")
+        return "\n".join(lines)
+
+    def _count_qq_bindings(self, qq_user_id: str) -> int:
+        """统计某个普通 QQ 号已绑定的官方账号数量（上限 MAX_BINDINGS_PER_QQ）。"""
+        target_id = str(qq_user_id).strip()
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM account_bindings "
+                "WHERE official_platform = ? AND qq_user_id = ?",
+                (OFFICIAL_PLATFORM_NAME, target_id),
+            ).fetchone()
+        return int(row[0]) if row else 0
 
     def _bind_official_account(self, official_user_id: str, qq_user_id: str) -> bool:
         source_id = str(official_user_id).strip()
@@ -934,6 +949,15 @@ class GuessCardPlugin(Star):  # type: ignore
                     "SELECT 1 FROM account_bindings WHERE official_platform = ? AND official_user_id = ?",
                     (OFFICIAL_PLATFORM_NAME, source_id),
                 ).fetchone():
+                    conn.rollback()
+                    return False
+
+                bound_count = cursor.execute(
+                    "SELECT COUNT(*) FROM account_bindings "
+                    "WHERE official_platform = ? AND qq_user_id = ?",
+                    (OFFICIAL_PLATFORM_NAME, target_id),
+                ).fetchone()
+                if int(bound_count[0] or 0) >= MAX_BINDINGS_PER_QQ:
                     conn.rollback()
                     return False
 
@@ -1016,6 +1040,32 @@ class GuessCardPlugin(Star):  # type: ignore
             except Exception as exc:
                 conn.rollback()
                 logger.error(f"绑定 QQ 官方机器人账号失败: {exc}", exc_info=True)
+                return False
+
+    def _unbind_official_account(self, official_user_id: str) -> bool:
+        """解除官方账号的绑定关系（只删绑定行，已迁移合并的历史分数不回退）。"""
+        source_id = str(official_user_id).strip()
+        if not source_id:
+            return False
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.cursor()
+                if not cursor.execute(
+                    "SELECT 1 FROM account_bindings WHERE official_platform = ? AND official_user_id = ?",
+                    (OFFICIAL_PLATFORM_NAME, source_id),
+                ).fetchone():
+                    conn.rollback()
+                    return False
+                cursor.execute(
+                    "DELETE FROM account_bindings WHERE official_platform = ? AND official_user_id = ?",
+                    (OFFICIAL_PLATFORM_NAME, source_id),
+                )
+                conn.commit()
+                return True
+            except Exception as exc:
+                conn.rollback()
+                logger.error(f"解绑 QQ 官方机器人账号失败: {exc}", exc_info=True)
                 return False
 
     def _get_display_name(self, user_id: str, original_name: Optional[str] = None) -> str:
@@ -1362,12 +1412,17 @@ class GuessCardPlugin(Star):  # type: ignore
             return
 
         official_user_id = str(event.get_sender_id())
-        if self._resolve_account_id(OFFICIAL_PLATFORM_NAME, official_user_id) != official_user_id:
-            current_id = self._resolve_account_id(OFFICIAL_PLATFORM_NAME, official_user_id)
+        current_id = self._resolve_account_id(OFFICIAL_PLATFORM_NAME, official_user_id)
+        if current_id != official_user_id:
             yield event.plain_result(f"当前官方机器人账号已经绑定至 QQ号 {current_id}。")
             return
 
-        yield event.plain_result(self._build_binding_confirmation_message(qq_user_id))
+        bound_count = self._count_qq_bindings(qq_user_id)
+        if bound_count >= MAX_BINDINGS_PER_QQ:
+            yield event.plain_result("绑定失败：该QQ号已绑定两个官机账号，无法继续绑定。")
+            return
+
+        yield event.plain_result(self._build_binding_confirmation_message(qq_user_id, bound_count))
         decision = None
 
         @session_waiter(timeout=60)
@@ -1401,6 +1456,58 @@ class GuessCardPlugin(Star):  # type: ignore
             yield event.plain_result(f"绑定成功！官方机的历史分数已迁移至 QQ号 {qq_user_id}。")
         else:
             yield event.plain_result("绑定失败：该官方账号可能已绑定，请稍后重试。")
+
+    @filter.command("猜卡面解绑", alias={"pjsk猜卡面解绑", "猜卡面解绑QQ"})
+    async def unbind_card_account(self, event: AstrMessageEvent):
+        """解除 QQ 官方机器人账号与普通 QQ 账号的绑定。"""
+        if not self._is_qq_official_event(event):
+            yield event.plain_result("此解绑功能仅支持 QQ 官方机器人使用。")
+            return
+
+        official_user_id = str(event.get_sender_id())
+        current_id = self._resolve_account_id(OFFICIAL_PLATFORM_NAME, official_user_id)
+        if current_id == official_user_id:
+            yield event.plain_result("当前官方机器人账号尚未绑定QQ号。")
+            return
+
+        yield event.plain_result(
+            f"你确认解除该官方机器人账号与 QQ号 {current_id} 的绑定？"
+            "已迁移的历史分数不会退回，绑定名额将释放。\n"
+            "发送“确认”将开始解绑。发送“取消”将取消解绑。"
+        )
+        decision = None
+
+        @session_waiter(timeout=60)
+        async def unbinding_waiter(controller: SessionController, answer_event: AstrMessageEvent):
+            nonlocal decision
+            if answer_event.message_str.strip() == "确认":
+                decision = "confirm"
+                controller.stop()
+            elif answer_event.message_str.strip() == "取消":
+                decision = "cancel"
+                controller.stop()
+
+        try:
+            await unbinding_waiter(
+                event,
+                session_filter=BindingSessionFilter(event.unified_msg_origin, official_user_id),
+            )
+        except TimeoutError:
+            yield event.plain_result("解绑确认已超时，解绑操作已取消。")
+            return
+
+        if decision == "cancel":
+            yield event.plain_result("已取消解绑。")
+            return
+        if decision != "confirm":
+            yield event.plain_result("未收到有效的解绑确认，解绑操作已取消。")
+            return
+
+        unbound = await asyncio.to_thread(self._unbind_official_account, official_user_id)
+        if unbound:
+            yield event.plain_result(f"解绑成功，该官方机器人账号已解除与 QQ号 {current_id} 的绑定。")
+        else:
+            yield event.plain_result("解绑失败，请稍后重试。")
 
     @filter.command("pjsk猜卡面", alias={"猜卡", "gc","猜卡面"})
     async def start_guess_card(self, event: AstrMessageEvent):
@@ -2134,7 +2241,8 @@ class GuessCardPlugin(Star):  # type: ignore
             "数据统计\n"
             "猜卡面排行榜 - 查看猜卡总分排行榜，看看谁是猜卡大师！\n"
             "猜卡面分数 - 查看自己的猜卡数据统计，了解自己的进步~\n"
-            "猜卡面绑定 QQ号 - QQ官方机器人绑定到你的QQ号，需发送“确认”\n"
+            "猜卡面绑定 QQ号 - QQ官方机器人绑定到你的QQ号，需发送“确认”（每个QQ号最多绑定两个官机）\n"
+            "猜卡面解绑 - 解除官方机与QQ号的绑定，需发送“确认”\n"
             "猜卡面自定义名称 - 设置你的个性化ID（不带参数可清除）\n\n"
         )
         yield event.plain_result(help_text)
