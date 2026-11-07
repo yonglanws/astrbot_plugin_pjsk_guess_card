@@ -1,4 +1,6 @@
 import asyncio
+import functools
+import inspect
 import json
 import random
 import re
@@ -60,8 +62,56 @@ except ImportError:  # 直接以脚本方式加载（单测）时使用绝对导
 PLUGIN_NAME = "pjsk_guess_card"
 PLUGIN_AUTHOR = "慵懒午睡"
 PLUGIN_DESCRIPTION = "PJSK猜卡面插件"
-PLUGIN_VERSION = "2.3.0"
+PLUGIN_VERSION = "2.4.1"
 PLUGIN_REPO_URL = "https://github.com/yonglanws/astrbot_plugin_pjsk_guess_card"
+
+
+def _suppress_default_llm(event) -> None:
+    """阻止本条消息继续触发 AstrBot 默认的 LLM（人格角色扮演）回复。
+
+    只关闭默认 LLM 链路，不终止事件传播：娱乐插件之间存在同名指令别名
+    （如“退出”“切换国服题库”），其他插件的处理器仍需收到同一条消息。
+    """
+    should_call_llm = getattr(event, "should_call_llm", None)
+    if callable(should_call_llm):
+        # AstrBot 的语义：传入 True 表示禁止默认 LLM 请求
+        # （管线判断条件为 not event.call_llm）。
+        should_call_llm(True)
+    else:
+        # 极老版本没有该 API，退回终止事件传播。
+        event.stop_event()
+
+
+def _command(*args, **kwargs):
+    """注册指令处理器，并在调用时关闭默认 LLM 回复。
+
+    指令消息已经由插件自己回复；若不禁用默认 LLM 链路，AstrBot 在
+    @/唤醒消息上还会再走一遍人格对话，对同一条指令再回复一遍。
+    """
+
+    register_command = filter.command(*args, **kwargs)
+
+    def decorator(func):
+        if inspect.isasyncgenfunction(func):
+
+            @functools.wraps(func)
+            async def asyncgen_wrapper(self, event, *f_args, **f_kwargs):
+                _suppress_default_llm(event)
+                async for item in func(self, event, *f_args, **f_kwargs):
+                    yield item
+
+            return register_command(asyncgen_wrapper)
+
+        @functools.wraps(func)
+        async def coroutine_wrapper(self, event, *f_args, **f_kwargs):
+            _suppress_default_llm(event)
+            return await func(self, event, *f_args, **f_kwargs)
+
+        return register_command(coroutine_wrapper)
+
+    return decorator
+
+
 DEFAULT_PLATFORM_NAME = "aiocqhttp"
 OFFICIAL_PLATFORM_NAME = "qq_official"
 MAX_BINDINGS_PER_QQ = 2
@@ -1362,7 +1412,7 @@ class GuessCardPlugin(Star):  # type: ignore
         }
 
     # --- 指令处理 ---
-    @filter.command("pjsk自动猜卡面", alias={"自动猜卡", "自动猜卡面", "agc", "/pjsk自动猜卡面", "/自动猜卡", "/自动猜卡面", "/agc"})
+    @_command("pjsk自动猜卡面", alias={"自动猜卡", "自动猜卡面", "agc", "/pjsk自动猜卡面", "/自动猜卡", "/自动猜卡面", "/agc"})
     async def start_auto_guess_card(self, event: AstrMessageEvent):
         """开启自动猜卡面模式"""
         if not self._is_group_allowed(event):
@@ -1388,17 +1438,17 @@ class GuessCardPlugin(Star):  # type: ignore
         async for res in self.start_guess_card(event):
             yield res
 
-    @filter.command("猜卡面切换国服题库", alias={"猜卡切换国服题库", "/猜卡面切换国服题库", "/猜卡切换国服题库"})
+    @_command("猜卡面切换国服题库", alias={"猜卡切换国服题库", "/猜卡面切换国服题库", "/猜卡切换国服题库"})
     async def switch_to_sc(self, event: AstrMessageEvent):
         """切换为国服题库。"""
         await self._switch_server(event, SERVER_SC)
 
-    @filter.command("猜卡面切换日服题库", alias={"猜卡切换日服题库", "/猜卡面切换日服题库", "/猜卡切换日服题库"})
+    @_command("猜卡面切换日服题库", alias={"猜卡切换日服题库", "/猜卡面切换日服题库", "/猜卡切换日服题库"})
     async def switch_to_jp(self, event: AstrMessageEvent):
         """切换为日服题库。"""
         await self._switch_server(event, SERVER_JP)
 
-    @filter.command(
+    @_command(
         "猜卡面绑定",
         alias={
             "pjsk猜卡面绑定",
@@ -1484,7 +1534,7 @@ class GuessCardPlugin(Star):  # type: ignore
         else:
             yield event.plain_result("绑定失败：该官方账号可能已绑定，请稍后重试。")
 
-    @filter.command(
+    @_command(
         "猜卡面解绑",
         alias={
             "pjsk猜卡面解绑",
@@ -1563,7 +1613,7 @@ class GuessCardPlugin(Star):  # type: ignore
         else:
             yield event.plain_result("解绑失败，请稍后重试。")
 
-    @filter.command("pjsk猜卡面", alias={"猜卡", "gc","猜卡面", "/pjsk猜卡面", "/猜卡", "/gc", "/猜卡面"})
+    @_command("pjsk猜卡面", alias={"猜卡", "gc","猜卡面", "/pjsk猜卡面", "/猜卡", "/gc", "/猜卡面"})
     async def start_guess_card(self, event: AstrMessageEvent):
         """开始一轮猜卡游戏"""
         if not self._is_group_allowed(event):
@@ -1998,7 +2048,7 @@ class GuessCardPlugin(Star):  # type: ignore
                     self.auto_game_sessions.pop(session_id, None)
                     yield event.plain_result("今天的游戏次数已经用完啦，自动猜卡面模式已停止。")
 
-    @filter.command("退出自动模式", alias={"退出", "停止自动猜卡", "停止自动猜卡面", "/退出自动模式", "/退出", "/停止自动猜卡", "/停止自动猜卡面"})
+    @_command("退出自动模式", alias={"退出", "停止自动猜卡", "停止自动猜卡面", "/退出自动模式", "/退出", "/停止自动猜卡", "/停止自动猜卡面"})
     async def quit_auto_mode(self, event: AstrMessageEvent):
         """退出自动猜卡面模式（对局进行中时由对局等待器处理）"""
         session_id = event.unified_msg_origin
@@ -2007,7 +2057,7 @@ class GuessCardPlugin(Star):  # type: ignore
         self.auto_game_sessions.pop(session_id, None)
         yield event.plain_result("已退出自动猜卡面模式。")
 
-    @filter.command("测试猜卡", alias={"/测试猜卡"})
+    @_command("测试猜卡", alias={"/测试猜卡"})
     async def test_guess_card(self, event: AstrMessageEvent):
         """测试模式：指定效果开始一轮猜卡游戏"""
         if not self._is_group_allowed(event):
@@ -2289,7 +2339,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 del self.game_sessions[session_id]
             # 不再删除锁实例，保留锁以维持互斥机制
 
-    @filter.command("猜卡面帮助", alias={"/猜卡面帮助"})
+    @_command("猜卡面帮助", alias={"/猜卡面帮助"})
     async def show_guess_card_help(self, event: AstrMessageEvent):
         """显示猜卡插件帮助"""
         if not self._is_group_allowed(event):
@@ -2312,7 +2362,7 @@ class GuessCardPlugin(Star):  # type: ignore
         yield event.plain_result(help_text)
 
 
-    @filter.command("猜卡面分数", alias={"pjsk猜卡面分数", "猜卡分数", "猜卡面个人分数", "/猜卡面分数", "/pjsk猜卡面分数", "/猜卡分数", "/猜卡面个人分数"})
+    @_command("猜卡面分数", alias={"pjsk猜卡面分数", "猜卡分数", "猜卡面个人分数", "/猜卡面分数", "/pjsk猜卡面分数", "/猜卡分数", "/猜卡面个人分数"})
     async def show_user_score(self, event: AstrMessageEvent):
         """显示玩家自己的猜卡积分和统计数据"""
         if not self._is_group_allowed(event):
@@ -2392,7 +2442,7 @@ class GuessCardPlugin(Star):  # type: ignore
         yield event.plain_result(stats_text)
 
 
-    @filter.command("猜卡面自定义名称", alias={"自定义名称", "猜卡自定义名称", "/猜卡面自定义名称", "/自定义名称", "/猜卡自定义名称"})
+    @_command("猜卡面自定义名称", alias={"自定义名称", "猜卡自定义名称", "/猜卡面自定义名称", "/自定义名称", "/猜卡自定义名称"})
     async def set_custom_name(self, event: AstrMessageEvent):
         """设置玩家自定义ID"""
         if not self._is_group_allowed(event):
@@ -2449,7 +2499,7 @@ class GuessCardPlugin(Star):  # type: ignore
                 else:
                     yield event.plain_result("你还没有参与过猜卡游戏，暂无自定义名称哦~ 🎮")
 
-    @filter.command("重置猜卡面次数", alias={"resetgl", "/重置猜卡面次数", "/resetgl"})
+    @_command("重置猜卡面次数", alias={"resetgl", "/重置猜卡面次数", "/resetgl"})
     async def reset_guess_limit(self, event: AstrMessageEvent):
         """重置用户猜卡次数（仅限管理员）"""
         if not self._is_group_allowed(event):
@@ -2482,7 +2532,7 @@ class GuessCardPlugin(Star):  # type: ignore
             yield event.plain_result(f"哎呀，没有找到用户 {target_id_str} 的游戏记录呢~ 是不是ID输入错了呀？")
 
 
-    @filter.command("猜卡面排行榜", alias={"猜卡排行榜", "本地猜卡排行榜", "/猜卡面排行榜", "/猜卡排行榜", "/本地猜卡排行榜"})
+    @_command("猜卡面排行榜", alias={"猜卡排行榜", "本地猜卡排行榜", "/猜卡面排行榜", "/猜卡排行榜", "/本地猜卡排行榜"})
     async def show_ranking(self, event: AstrMessageEvent):
         """显示猜卡排行榜"""
         if not self._is_group_allowed(event):
